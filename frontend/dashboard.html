@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard - Lector IA</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <h1>Panel del Lector IA</h1>
+        <p class="user-info" id="user-info">Cargando...</p>
+        
+        <input type="text" id="sheetIdInput" placeholder="Pega el ID de tu Google Sheet aquí">
+        <input type="file" id="imageInput" accept="image/*">
+        <img id="preview" alt="Vista previa de la imagen">
+        
+        <button id="uploadButton" disabled>1. Selecciona Imagen y Sheet ID</button>
+        <p id="status"></p>
+        <a id="logout-button" class="button" style="background-color: #e44d3a;">Cerrar Sesión</a>
+    </div>
+
+    <script>
+        // ¡IMPORTANTE! Esta URL debe ser la misma que en index.html
+        const BACKEND_URL = "http://127.0.0.1:5000"; 
+
+        const userInfo = document.getElementById('user-info');
+        const logoutButton = document.getElementById('logout-button');
+        const imageInput = document.getElementById('imageInput');
+        const sheetIdInput = document.getElementById('sheetIdInput');
+        const preview = document.getElementById('preview');
+        const uploadButton = document.getElementById('uploadButton');
+        const status = document.getElementById('status');
+        let selectedFile;
+
+        // --- LÓGICA PRINCIPAL ---
+        document.addEventListener('DOMContentLoaded', async () => {
+            const profileRes = await fetch(`${BACKEND_URL}/api/profile`, { credentials: 'include' });
+            const data = await profileRes.json();
+
+            if (!data.logged_in) {
+                window.location.href = 'index.html';
+                return;
+            }
+            
+            userInfo.textContent = `Sesión iniciada como: ${data.email}`;
+            logoutButton.href = `${BACKEND_URL}/logout`;
+        });
+
+        function checkFormState() {
+            if (selectedFile && sheetIdInput.value.trim() !== '') {
+                uploadButton.disabled = false;
+                uploadButton.textContent = 'Procesar y Guardar Datos';
+            } else {
+                uploadButton.disabled = true;
+                uploadButton.textContent = '1. Selecciona Imagen y Sheet ID';
+            }
+        }
+
+        imageInput.addEventListener('change', (event) => {
+            selectedFile = event.target.files[0];
+            if (selectedFile) {
+                preview.src = URL.createObjectURL(selectedFile);
+                preview.style.display = 'block';
+            }
+            checkFormState();
+        });
+
+        sheetIdInput.addEventListener('input', checkFormState);
+
+        uploadButton.addEventListener('click', async () => {
+            if (!selectedFile || !sheetIdInput.value) return;
+
+            uploadButton.disabled = true;
+            status.textContent = 'Subiendo y procesando... Esto puede tardar un momento.';
+            status.style.color = '#1877f2';
+
+            const formData = new FormData();
+            formData.append('image', selectedFile);
+            formData.append('sheetId', sheetIdInput.value.trim());
+
+            try {
+                const response = await fetch(`${BACKEND_URL}/api/process-image`, {
+                    method: 'POST',
+                    body: formData,
+                    credentials: 'include'
+                });
+
+                const result = await response.json();
+
+                if (response.ok) {
+                    status.textContent = result.message;
+                    status.style.color = 'green';
+                } else {
+                    status.textContent = `Error: ${result.error}`;
+                    status.style.color = 'red';
+                }
+            } catch (error) {
+                status.textContent = 'Error de conexión con el servidor.';
+                status.style.color = 'red';
+            } finally {
+                uploadButton.disabled = false;
+            }
+        });
+    </script>
+</body>
+</html>

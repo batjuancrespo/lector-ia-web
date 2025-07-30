@@ -1,0 +1,12 @@
+Flask
+requests
+google-auth-oauthlib
+psycopg2-binary
+python-dotenv
+gunicorn
+Flask-Cors
+easyocr
+opencv-python-headless
+pandas
+gspread
+cryptography
