@@ -13,6 +13,8 @@
         #results-form input { width: calc(100% - 22px); }
         select { width: 100%; padding: 10px; margin-top: 15px; border-radius: 6px; }
     </style>
+    <!-- Importamos la librería para comprimir imágenes -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/compressorjs/1.2.1/compressor.min.js" integrity="sha512-MgYeYFj8R3S6rvZHiJ1adMGO_OizWFaSbIea9sOTf2I3GK1uaRswiPbaL5J+I1052B1fL/0Gz3er1Lz3G7Qn+Q==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 </head>
 <body>
     <div class="container">
@@ -35,7 +37,7 @@
         <div id="upload-section" class="section" style="display: none;">
             <h2>2. Sube una Imagen para Extraer Datos</h2>
             <input type="file" id="imageInput" accept="image/*">
-            <img id="preview" alt="Vista previa de la imagen">
+            <img id="preview" alt="Vista previa de la imagen" style="display: none;">
             <button id="extract-btn" disabled>Extraer Datos</button>
         </div>
 
@@ -51,7 +53,7 @@
 
     <script>
         const BACKEND_URL = "https://lector-ia-web.onrender.com";
-        // Obtenemos los elementos del DOM
+        // Obtenemos todos los elementos del DOM que vamos a manipular
         const userInfo = document.getElementById('user-info');
         const logoutButton = document.getElementById('logout-button');
         const sheetsLoader = document.getElementById('sheets-loader');
@@ -72,8 +74,9 @@
         let userSheets = [];
         let currentSelectedSheet = null;
         let extractedData = null;
+        let compressedImageFile = null; // Variable para guardar la imagen ya comprimida
 
-        // --- LÓGICA PRINCIPAL ---
+        // --- LÓGICA PRINCIPAL AL CARGAR LA PÁGINA ---
         document.addEventListener('DOMContentLoaded', () => {
             const hash = window.location.hash;
             if (hash && hash.startsWith('#token=')) {
@@ -93,10 +96,12 @@
         });
 
         // --- FUNCIONES DE LA APP ---
+
+        // Función central para hacer llamadas a nuestra API de forma segura
         async function apiFetch(endpoint, options = {}) {
             options.headers = { ...options.headers, 'Authorization': `Bearer ${token}` };
             const response = await fetch(`${BACKEND_URL}${endpoint}`, options);
-            if (response.status === 401) { // Token inválido o expirado
+            if (response.status === 401) { // Si el token es inválido, deslogueamos
                 localStorage.removeItem('accessToken');
                 window.location.href = 'index.html';
                 throw new Error("No autorizado");
@@ -104,13 +109,14 @@
             return response;
         }
 
+        // Carga las sheets guardadas del usuario desde el backend
         async function loadUserSheets() {
             sheetsLoader.style.display = 'block';
             try {
                 const response = await apiFetch('/api/sheets');
                 userSheets = await response.json();
                 
-                userInfo.textContent = "¡Bienvenido!"; // Placeholder, se puede poner el email del token
+                userInfo.textContent = "¡Bienvenido!";
                 logoutButton.style.display = 'inline-block';
                 
                 if (userSheets.length > 0) {
@@ -127,19 +133,26 @@
             }
         }
 
+        // Rellena el menú desplegable con las sheets del usuario
         function populateSheetsDropdown() {
             sheetsDropdown.innerHTML = userSheets.map(s => `<option value="${s.sheet_id}">${s.sheet_name}</option>`).join('');
         }
 
+        // Se ejecuta cuando el usuario selecciona una sheet del menú
         function handleSheetSelection() {
             const selectedId = sheetsDropdown.value;
             currentSelectedSheet = userSheets.find(s => s.sheet_id === selectedId);
             uploadSection.style.display = 'block';
-            resultsSection.style.display = 'none'; // Ocultar resultados anteriores
-            imageInput.value = ''; // Limpiar input de imagen
+            resultsSection.style.display = 'none';
+            imageInput.value = '';
+            preview.style.display = 'none';
             extractBtn.disabled = true;
+            compressedImageFile = null;
         }
 
+        // --- EVENT LISTENERS (INTERACCIONES DEL USUARIO) ---
+
+        // Botón para añadir una nueva sheet
         addSheetBtn.addEventListener('click', async () => {
             const newSheetId = newSheetIdInput.value.trim();
             if (!newSheetId) { alert("Por favor, introduce un ID de Sheet."); return; }
@@ -152,46 +165,83 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ sheet_id: newSheetId })
                 });
-                if (!response.ok) throw new Error("No se pudo analizar la sheet.");
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.error || "No se pudo analizar la sheet.");
+                }
                 
                 newSheetIdInput.value = '';
                 status.textContent = "¡Sheet añadida con éxito!";
-                loadUserSheets(); // Recargar la lista
+                loadUserSheets(); // Recargar la lista para que aparezca la nueva
             } catch (e) {
-                const error = await response.json();
-                status.textContent = `Error: ${error.error}`;
+                status.textContent = `Error: ${e.message}`;
             } finally {
                 addSheetBtn.disabled = false;
             }
         });
 
         sheetsDropdown.addEventListener('change', handleSheetSelection);
-        imageInput.addEventListener('change', () => { extractBtn.disabled = !imageInput.files[0]; });
 
+        // Input de archivo: comprime la imagen al seleccionarla
+        imageInput.addEventListener('change', (event) => {
+            const file = event.target.files[0];
+            if (!file) {
+                extractBtn.disabled = true;
+                compressedImageFile = null;
+                return;
+            }
+
+            status.textContent = "Comprimiendo imagen para optimizar...";
+            extractBtn.disabled = true;
+            
+            new Compressor(file, {
+                quality: 0.8,       // Calidad del 80% (buen balance)
+                maxWidth: 1600,     // Ancho máximo
+                maxHeight: 1600,    // Alto máximo
+                success(result) {
+                    compressedImageFile = result; // Guardamos el archivo comprimido
+                    preview.src = URL.createObjectURL(result);
+                    preview.style.display = 'block';
+                    extractBtn.disabled = false;
+                    status.textContent = "Imagen lista para extraer.";
+                },
+                error(err) {
+                    status.textContent = "Error al procesar la imagen.";
+                    compressedImageFile = null;
+                },
+            });
+        });
+
+        // Botón para extraer datos
         extractBtn.addEventListener('click', async () => {
-            if (!imageInput.files[0] || !currentSelectedSheet) return;
+            if (!compressedImageFile || !currentSelectedSheet) return;
             
             status.textContent = "Extrayendo datos con IA... Esto puede tardar unos segundos.";
             extractBtn.disabled = true;
+            resultsSection.style.display = 'none';
             
             const formData = new FormData();
-            formData.append('image', imageInput.files[0]);
+            formData.append('image', compressedImageFile, compressedImageFile.name);
             formData.append('columns', JSON.stringify(currentSelectedSheet.columns));
             
             try {
                 const response = await apiFetch('/api/extract', { method: 'POST', body: formData });
-                if (!response.ok) throw new Error("La extracción falló.");
+                 if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.error || "La extracción con IA falló.");
+                }
                 
                 extractedData = await response.json();
                 displayResultsForm();
-                status.textContent = "Datos extraídos. Por favor, verifica.";
+                status.textContent = "Datos extraídos. Por favor, verifica y corrige si es necesario.";
             } catch (e) {
-                status.textContent = "Error durante la extracción.";
+                status.textContent = `Error: ${e.message}`;
             } finally {
                 extractBtn.disabled = false;
             }
         });
 
+        // Muestra el formulario con los resultados de la IA
         function displayResultsForm() {
             resultsForm.innerHTML = ''; // Limpiar formulario anterior
             for (const column of currentSelectedSheet.columns) {
@@ -207,13 +257,14 @@
             resultsSection.style.display = 'block';
         }
 
+        // Botón para guardar los datos finales en la sheet
         saveBtn.addEventListener('click', async () => {
             const finalData = {};
             for (const column of currentSelectedSheet.columns) {
                 finalData[column] = document.getElementById(`field-${column}`).value;
             }
             
-            status.textContent = "Guardando...";
+            status.textContent = "Guardando en Google Sheets...";
             saveBtn.disabled = true;
 
             try {
@@ -226,13 +277,20 @@
                         data: finalData
                     })
                 });
-                if (!response.ok) throw new Error("No se pudo guardar.");
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.error || "No se pudo guardar.");
+                }
                 
-                status.textContent = "¡Datos guardados en Google Sheets con éxito!";
+                status.textContent = "¡Datos guardados con éxito!";
+                // Reseteamos para la siguiente imagen
                 resultsSection.style.display = 'none';
                 imageInput.value = '';
+                preview.style.display = 'none';
+                extractBtn.disabled = true;
+                compressedImageFile = null;
             } catch(e) {
-                status.textContent = "Error al guardar los datos.";
+                status.textContent = `Error: ${e.message}`;
             } finally {
                 saveBtn.disabled = false;
             }
