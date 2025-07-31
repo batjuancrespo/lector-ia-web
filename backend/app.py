@@ -16,7 +16,7 @@ import io
 import jwt
 import datetime
 from functools import wraps
-import traceback # Importamos traceback para logs detallados
+import traceback
 
 # --- INICIALIZACIÓN Y CONFIGURACIÓN ---
 load_dotenv()
@@ -33,8 +33,6 @@ SCOPES = ['https://www.googleapis.com/auth/userinfo.email',
         'https://www.googleapis.com/auth/spreadsheets', 
         'openid']
 
-# --- Carga Segura del Client ID al inicio de la aplicación ---
-# Esto hace que la app sea más robusta y evita errores de "archivo no encontrado" en Render.
 try:
     with open(CLIENT_SECRETS_FILE) as f:
         client_config = json.load(f)
@@ -47,7 +45,6 @@ except FileNotFoundError:
 except Exception as e:
     print(f"ERROR CRÍTICO al cargar el Client ID: {e}")
     GOOGLE_CLIENT_ID = None
-
 
 # --- LÓGICA DE TOKENS JWT ---
 def create_access_token(data):
@@ -135,7 +132,7 @@ def callback():
         profile_info = id_token.verify_oauth2_token(
             credentials.id_token, 
             google.auth.transport.requests.Request(), 
-            GOOGLE_CLIENT_ID # Usamos la variable global cargada al inicio
+            GOOGLE_CLIENT_ID
         )
     except ValueError as e:
         print(f"Error al verificar el token de Google: {e}")
@@ -166,46 +163,41 @@ def process_image():
         sheet_id = request.form['sheetId']
         file_storage = request.files['image']
 
-        print(f"Iniciando procesamiento para: {email}, Sheet ID: {sheet_id}")
-
         credentials = load_credentials_from_db(email)
         if not credentials:
-            print(f"LOG ERROR: No se encontraron credenciales en la BD para el usuario {email}")
             return jsonify({'error': 'No se pudieron cargar las credenciales del usuario'}), 500
-        
-        print("Credenciales cargadas desde la BD correctamente.")
 
         image_bytes = file_storage.read()
         image = Image.open(io.BytesIO(image_bytes))
-        print("Imagen leída y abierta correctamente.")
-
+        
         texto_extraido = pytesseract.image_to_string(image, lang='spa')
-        print("Tesseract ha extraído el texto.")
+
+        # ---- INICIO DEL BLOQUE DE LOG DE TESSERACT ----
+        print("==========================================================")
+        print(f"DEBUG: Texto en crudo extraído por Tesseract para el usuario {email}:")
+        print("----------------------------------------------------------")
+        print(texto_extraido)
+        print("==========================================================")
+        # ---- FIN DEL BLOQUE DE LOG DE TESSERACT ----
 
         if not texto_extraido.strip():
-            print("Tesseract no devolvió texto.")
             return jsonify({'message': 'No se detectó texto en la imagen.'})
 
         data_to_save = [[line] for line in texto_extraido.split('\n') if line.strip()]
 
         if not data_to_save:
-             print("El texto extraído no contenía líneas válidas para guardar.")
              return jsonify({'message': 'No se encontró texto estructurado para guardar.'})
-        
-        print(f"Preparando para guardar {len(data_to_save)} filas en Google Sheets.")
+
         gc = gspread.authorize(credentials)
         spreadsheet = gc.open_by_key(sheet_id)
         worksheet = spreadsheet.sheet1
         worksheet.append_rows(data_to_save)
-        print("¡Éxito! Datos guardados en Google Sheets.")
 
         return jsonify({'message': f'¡Éxito! Se han añadido {len(data_to_save)} filas a tu Google Sheet.'})
 
     except gspread.exceptions.SpreadsheetNotFound:
-        print(f"LOG ERROR: Spreadsheet no encontrada con ID: {sheet_id}")
         return jsonify({'error': 'Hoja de cálculo no encontrada. Revisa el ID y asegúrate de haberla compartido con tu email.'}), 404
     except Exception as e:
-        # Este es el log más importante. Imprimirá el error completo y detallado.
         print(f"LOG ERROR CRÍTICO en /api/process-image: {e}")
         traceback.print_exc()
         return jsonify({'error': 'Ocurrió un error interno muy grave al procesar la imagen. Revisa los logs del servidor.'}), 500
