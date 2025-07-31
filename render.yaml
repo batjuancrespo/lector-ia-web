@@ -1,22 +1,19 @@
 services:
+  # Este es nuestro servicio de backend
   - type: web
-    name: mi-lector-ia-backend 
-    env: python
+    name: mi-lector-ia-backend
+    # ¡IMPORTANTE! Le decimos a Render que use Docker
+    env: docker
+    # Ubicación del Dockerfile
+    dockerfilePath: ./backend/Dockerfile
+    # Plan gratuito
     plan: free
-    region: frankfurt # Tu región
-    rootDir: backend
-    buildFilter:
-      paths:
-        - "backend/**" # Re-desplegar si algo cambia en la carpeta backend
-    buildPacks: # ---> ¡ESTA ES LA MAGIA! <---
-      - url: https://github.com/render-examples/apt-buildpack
-    build_command: "pip install -r requirements.txt"
-    start_command: "gunicorn 'app:app'"
-    env_vars:
+    # Región que ya estabas usando
+    region: frankfurt
+    # Variables de entorno que NO son secretas
+    envVars:
       - key: PYTHON_VERSION
         value: 3.10.11
       - key: FRONTEND_URL
-        value: "https://batjuancrespo.github.io/lector-ia-web/" # ¡CONFIRMA QUE ESTA ES LA URL DE TU GITHUB PAGES!
-      # --- CLAVES SECRETAS ---
-      # Estas las vamos a gestionar desde el dashboard para no subirlas a GitHub.
-      # Render las unirá con este archivo.
+        # Asegúrate de que esta URL es la correcta para tu GitHub Pages
+        value: https://batjuancrespo.github.io/lector-ia-web/
