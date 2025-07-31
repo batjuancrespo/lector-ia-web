@@ -22,7 +22,8 @@ os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY")
-CORS(app, supports_credentials=True, origins=[os.environ.get("FRONTEND_URL")])
+### PRUEBA DE CORS: Poniendo la URL directamente ###
+CORS(app, supports_credentials=True, origins=["https://batjuancrespo.github.io"])
 
 cipher_suite = Fernet(os.environ.get("ENCRYPTION_KEY").encode())
 
