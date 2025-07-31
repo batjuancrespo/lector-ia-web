@@ -3,7 +3,8 @@ import json
 import psycopg2
 from cryptography.fernet import Fernet
 from dotenv import load_dotenv
-from flask import Flask, request, redirect, url_for, jsonify
+# ¡ASEGÚRATE DE QUE 'session' ESTÁ AQUÍ!
+from flask import Flask, request, redirect, url_for, jsonify, session
 from flask_cors import CORS
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
@@ -22,9 +23,11 @@ import google.generativeai as genai
 load_dotenv()
 os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
 app = Flask(__name__)
+# ¡LA SECRET_KEY ES NECESARIA PARA LAS SESIONES!
 app.secret_key = os.environ.get("FLASK_SECRET_KEY")
 CORS(app, supports_credentials=True, origins=["https://batjuancrespo.github.io"])
 
+# ... (El resto de la configuración inicial no cambia)
 try:
     GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
     if not GEMINI_API_KEY: raise ValueError("GEMINI_API_KEY no configurada.")
@@ -41,7 +44,7 @@ SCOPES = ['https://www.googleapis.com/auth/userinfo.email',
         'https://www.googleapis.com/auth/userinfo.profile', 
         'https://www.googleapis.com/auth/spreadsheets', 
         'openid']
-
+    
 try:
     with open(CLIENT_SECRETS_FILE) as f:
         GOOGLE_CLIENT_ID = json.load(f).get('web', {}).get('client_id')
@@ -95,18 +98,21 @@ def load_credentials_from_db(email):
         decrypted_credentials = cipher_suite.decrypt(user_data[0].encode())
         return Credentials.from_authorized_user_info(json.loads(decrypted_credentials))
     return None
-
-# (Rutas de login/callback sin cambios)
+    
+# --- RUTAS DE LOGIN/CALLBACK CORREGIDAS ---
 @app.route('/login')
 def login():
     flow = Flow.from_client_secrets_file(CLIENT_SECRETS_FILE, scopes=SCOPES, redirect_uri=url_for('callback', _external=True))
     authorization_url, state = flow.authorization_url(access_type='offline', prompt='consent')
+    # ¡LÍNEA RESTAURADA! Guardamos el 'state' para la verificación CSRF.
+    session['state'] = state
     return redirect(authorization_url)
 
 @app.route('/callback')
 def callback():
-    if not GOOGLE_CLIENT_ID: return "Error del servidor: Client ID no configurado.", 500
-    flow = Flow.from_client_secrets_file(CLIENT_SECRETS_FILE, scopes=SCOPES, redirect_uri=url_for('callback', _external=True))
+    # ¡LÍNEA CORREGIDA! Verificamos el 'state' para prevenir ataques CSRF.
+    state = session.pop('state', None)
+    flow = Flow.from_client_secrets_file(CLIENT_SECRETS_FILE, scopes=SCOPES, state=state, redirect_uri=url_for('callback', _external=True))
     flow.fetch_token(authorization_response=request.url)
     credentials = flow.credentials
     try:
@@ -118,7 +124,7 @@ def callback():
     frontend_url = os.environ.get("FRONTEND_URL").rstrip('/')
     return redirect(f"{frontend_url}/dashboard.html#token={access_token}")
 
-# --- NUEVAS RUTAS PARA GESTIONAR LAS SHEETS ---
+# --- (El resto de las rutas son las mismas que antes) ---
 @app.route('/api/sheets', methods=['GET'])
 @token_required
 def get_user_sheets():
@@ -137,27 +143,20 @@ def add_user_sheet():
     email = request.current_user_email
     sheet_id = request.json.get('sheet_id')
     if not sheet_id: return jsonify({'error': 'Falta el sheet_id'}), 400
-    
     try:
         credentials = load_credentials_from_db(email)
         if not credentials: return jsonify({'error': 'No se pudieron cargar las credenciales'}), 500
-        
         gc = gspread.authorize(credentials)
         spreadsheet = gc.open_by_key(sheet_id)
         worksheet = spreadsheet.sheet1
-        headers = worksheet.row_values(1) # Leemos la primera fila
+        headers = worksheet.row_values(1)
         sheet_name = spreadsheet.title
-        
         conn = get_db_connection()
         cur = conn.cursor()
-        cur.execute(
-            "INSERT INTO user_sheets (user_email, sheet_id, sheet_name, columns, last_used_at) VALUES (%s, %s, %s, %s, NOW()) ON CONFLICT (user_email, sheet_id) DO UPDATE SET sheet_name = EXCLUDED.sheet_name, columns = EXCLUDED.columns, last_used_at = NOW();",
-            (email, sheet_id, sheet_name, json.dumps(headers))
-        )
+        cur.execute("INSERT INTO user_sheets (user_email, sheet_id, sheet_name, columns, last_used_at) VALUES (%s, %s, %s, %s, NOW()) ON CONFLICT (user_email, sheet_id) DO UPDATE SET sheet_name = EXCLUDED.sheet_name, columns = EXCLUDED.columns, last_used_at = NOW();", (email, sheet_id, sheet_name, json.dumps(headers)))
         conn.commit()
         cur.close()
         conn.close()
-        
         return jsonify({'sheet_id': sheet_id, 'sheet_name': sheet_name, 'columns': headers}), 201
     except gspread.exceptions.SpreadsheetNotFound:
         return jsonify({'error': 'Spreadsheet no encontrada'}), 404
@@ -165,67 +164,52 @@ def add_user_sheet():
         traceback.print_exc()
         return jsonify({'error': 'Error interno al analizar la sheet'}), 500
 
-# --- RUTA DE EXTRACCIÓN CON IA (Modificada) ---
 @app.route('/api/extract', methods=['POST'])
 @token_required
 def extract_data_from_image():
-    # (La lógica de esta ruta ahora es la que tenía antes process-image)
     if gemini_model is None: return jsonify({'error': 'IA no configurada'}), 500
     if 'image' not in request.files or 'columns' not in request.form: return jsonify({'error': 'Falta imagen o columnas'}), 400
     try:
         columns = json.loads(request.form['columns'])
         image_bytes = request.files['image'].read()
         image = Image.open(io.BytesIO(image_bytes))
-        
         json_structure = json.dumps({col: "" for col in columns})
         prompt_text = f"Analiza la imagen y extrae la información para rellenar este JSON. Responde únicamente con el JSON rellenado, sin explicaciones ni formato de código.\n\nJSON a rellenar:\n{json_structure}"
-        
         response = gemini_model.generate_content([prompt_text, image])
         extracted_json_text = response.text.strip().replace('```json', '').replace('```', '').strip()
         extracted_data = json.loads(extracted_json_text)
-        
         return jsonify(extracted_data)
     except Exception as e:
         traceback.print_exc()
         return jsonify({'error': 'Error interno durante la extracción con IA'}), 500
 
-# --- NUEVA RUTA PARA GUARDAR LOS DATOS FINALES ---
 @app.route('/api/save', methods=['POST'])
 @token_required
 def save_data_to_sheet():
     email = request.current_user_email
     sheet_id = request.json.get('sheet_id')
-    data_to_save = request.json.get('data') # Objeto JSON con los datos
-    columns_order = request.json.get('columns') # Lista con el orden de las columnas
-
-    if not all([sheet_id, data_to_save, columns_order]):
-        return jsonify({'error': 'Faltan datos (sheet_id, data, columns)'}), 400
-        
+    data_to_save = request.json.get('data')
+    columns_order = request.json.get('columns')
+    if not all([sheet_id, data_to_save, columns_order]): return jsonify({'error': 'Faltan datos (sheet_id, data, columns)'}), 400
     try:
         credentials = load_credentials_from_db(email)
         if not credentials: return jsonify({'error': 'No se pudieron cargar credenciales'}), 500
-        
         gc = gspread.authorize(credentials)
         spreadsheet = gc.open_by_key(sheet_id)
         worksheet = spreadsheet.sheet1
-        
-        # Ordenamos los datos según el orden de las columnas de la sheet
         row_to_append = [data_to_save.get(col, "") for col in columns_order]
         worksheet.append_row(row_to_append)
-        
-        # Actualizamos la marca de "último uso"
         conn = get_db_connection()
         cur = conn.cursor()
         cur.execute("UPDATE user_sheets SET last_used_at = NOW() WHERE user_email = %s AND sheet_id = %s;", (email, sheet_id))
         conn.commit()
         cur.close()
         conn.close()
-        
         return jsonify({'message': 'Datos guardados correctamente'}), 200
     except Exception as e:
         traceback.print_exc()
         return jsonify({'error': 'Error interno al guardar en la sheet'}), 500
-
+    
 @app.route('/')
 def index(): return "Backend del Lector IA funcionando."
 if __name__ == '__main__': app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)), debug=True)
