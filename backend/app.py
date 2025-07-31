@@ -20,18 +20,20 @@ os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
 
 app = Flask(__name__)
 
-# --- ¡¡¡LA SOLUCIÓN ESTÁ AQUÍ!!! ---
-# Configura la cookie de sesión para que funcione en un entorno cross-domain (github.io -> onrender.com)
-app.config.update(
-    SESSION_COOKIE_SAMESITE='None',
-    SESSION_COOKIE_SECURE=True
-)
-
+# --- CONFIGURACIÓN ESENCIAL DE LA APLICACIÓN ---
+# Clave secreta para firmar la cookie de sesión
 app.secret_key = os.environ.get("FLASK_SECRET_KEY")
 
-# Configuración de CORS (ya estaba bien, pero la dejamos junto a la otra config)
-CORS(app, supports_credentials=True, origins=["https://batjuancrespo.github.io"])
+# Configuración de la cookie de sesión para que funcione en un entorno cross-domain (github.io -> onrender.com)
+# Secure=True: La cookie solo se envía sobre HTTPS.
+# SameSite='None': Permite que la cookie se envíe en peticiones cross-site.
+app.config.update(
+    SESSION_COOKIE_SECURE=True,
+    SESSION_COOKIE_SAMESITE='None'
+)
 
+# Habilita CORS, permitiendo peticiones desde el frontend y el envío de credenciales (cookies)
+CORS(app, supports_credentials=True, origins=["https://batjuancrespo.github.io"])
 
 cipher_suite = Fernet(os.environ.get("ENCRYPTION_KEY").encode())
 
@@ -41,7 +43,7 @@ SCOPES = ['https://www.googleapis.com/auth/userinfo.email',
         'https://www.googleapis.com/auth/spreadsheets', 
         'openid']
 
-# (El resto del archivo es exactamente igual que antes)
+# (El resto del archivo es exactamente igual, no ha cambiado)
 
 # --- FUNCIONES DE BASE DE DATOS Y CIFRADO ---
 def get_db_connection():
