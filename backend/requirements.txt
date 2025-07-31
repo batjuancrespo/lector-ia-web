@@ -6,7 +6,7 @@ python-dotenv
 gunicorn
 Flask-Cors
 Pillow
-pytesseract
+google-generativeai
 gspread
 cryptography
 PyJWT
