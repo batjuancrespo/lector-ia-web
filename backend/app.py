@@ -10,8 +10,6 @@ from google_auth_oauthlib.flow import Flow
 import google.auth.transport.requests
 from google.oauth2 import id_token
 import gspread
-
-### CAMBIO: Imports actualizados para Tesseract ###
 import pytesseract
 from PIL import Image
 import io
@@ -21,9 +19,19 @@ load_dotenv()
 os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
 
 app = Flask(__name__)
+
+# --- ¡¡¡LA SOLUCIÓN ESTÁ AQUÍ!!! ---
+# Configura la cookie de sesión para que funcione en un entorno cross-domain (github.io -> onrender.com)
+app.config.update(
+    SESSION_COOKIE_SAMESITE='None',
+    SESSION_COOKIE_SECURE=True
+)
+
 app.secret_key = os.environ.get("FLASK_SECRET_KEY")
-### PRUEBA DE CORS: Poniendo la URL directamente ###
+
+# Configuración de CORS (ya estaba bien, pero la dejamos junto a la otra config)
 CORS(app, supports_credentials=True, origins=["https://batjuancrespo.github.io"])
+
 
 cipher_suite = Fernet(os.environ.get("ENCRYPTION_KEY").encode())
 
@@ -33,10 +41,9 @@ SCOPES = ['https://www.googleapis.com/auth/userinfo.email',
         'https://www.googleapis.com/auth/spreadsheets', 
         'openid']
 
-### CAMBIO: Eliminada la inicialización de EasyOCR ###
-# Ya no se necesita cargar ningún modelo pesado al iniciar.
+# (El resto del archivo es exactamente igual que antes)
 
-# --- FUNCIONES DE BASE DE DATOS Y CIFRADO (Sin cambios) ---
+# --- FUNCIONES DE BASE DE DATOS Y CIFRADO ---
 def get_db_connection():
     conn = psycopg2.connect(os.environ.get("DATABASE_URL"))
     return conn
@@ -69,7 +76,7 @@ def load_credentials_from_db(email):
         return Credentials.from_authorized_user_info(json.loads(decrypted_credentials))
     return None
 
-# --- RUTAS DE AUTENTICACIÓN (Sin cambios) ---
+# --- RUTAS DE AUTENTICACIÓN ---
 @app.route('/login')
 def login():
     flow = Flow.from_client_secrets_file(
@@ -109,7 +116,7 @@ def logout():
     session.clear()
     return redirect(os.environ.get("FRONTEND_URL"))
 
-# --- RUTAS DE LA API (Parte de process-image modificada) ---
+# --- RUTAS DE LA API ---
 @app.route('/api/profile')
 def profile():
     if 'email' in session:
@@ -133,25 +140,19 @@ def process_image():
         if not credentials:
             return jsonify({'error': 'No se pudieron cargar las credenciales'}), 500
 
-        ### CAMBIO: Lógica de OCR actualizada a Tesseract ###
-        # 1. Procesamiento de Imagen y OCR con Tesseract
         image_bytes = file_storage.read()
         image = Image.open(io.BytesIO(image_bytes))
         
-        # Usamos pytesseract para extraer el texto, especificando el idioma español ('spa')
         texto_extraido = pytesseract.image_to_string(image, lang='spa')
 
         if not texto_extraido.strip():
             return jsonify({'message': 'No se detectó texto en la imagen.'})
 
-        # 2. Estructurar datos (cada línea del texto es una fila en la hoja de cálculo)
-        # Filtramos líneas vacías que a veces Tesseract puede generar.
         data_to_save = [[line] for line in texto_extraido.split('\n') if line.strip()]
 
         if not data_to_save:
              return jsonify({'message': 'No se encontró texto estructurado para guardar.'})
 
-        # 3. Guardar en Google Sheets
         gc = gspread.authorize(credentials)
         spreadsheet = gc.open_by_key(sheet_id)
         worksheet = spreadsheet.sheet1
@@ -165,7 +166,7 @@ def process_image():
         print(f"Error en /api/process-image: {e}")
         return jsonify({'error': 'Ocurrió un error interno al procesar la imagen.'}), 500
 
-# --- RUTA PRINCIPAL (Sin cambios) ---
+# --- RUTA PRINCIPAL ---
 @app.route('/')
 def index():
     return "Backend del Lector IA funcionando."
