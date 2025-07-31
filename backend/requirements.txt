@@ -9,3 +9,4 @@ Pillow
 pytesseract
 gspread
 cryptography
+PyJWT

@@ -3,7 +3,7 @@ import json
 import psycopg2
 from cryptography.fernet import Fernet
 from dotenv import load_dotenv
-from flask import Flask, request, redirect, session, url_for, jsonify
+from flask import Flask, request, redirect, url_for, jsonify
 from flask_cors import CORS
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
@@ -13,51 +13,67 @@ import gspread
 import pytesseract
 from PIL import Image
 import io
+import jwt # <-- Nueva librería para tokens
+import datetime
+from functools import wraps
 
 # --- INICIALIZACIÓN Y CONFIGURACIÓN ---
 load_dotenv()
 os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
 
 app = Flask(__name__)
-
-# --- CONFIGURACIÓN ESENCIAL DE LA APLICACIÓN ---
-# Clave secreta para firmar la cookie de sesión
+# La clave secreta ahora se usará para firmar los tokens JWT
 app.secret_key = os.environ.get("FLASK_SECRET_KEY")
-
-# Configuración de la cookie de sesión para que funcione en un entorno cross-domain (github.io -> onrender.com)
-# Secure=True: La cookie solo se envía sobre HTTPS.
-# SameSite='None': Permite que la cookie se envíe en peticiones cross-site.
-app.config.update(
-    SESSION_COOKIE_SECURE=True,
-    SESSION_COOKIE_SAMESITE='None'
-)
-
-# Habilita CORS, permitiendo peticiones desde el frontend y el envío de credenciales (cookies)
 CORS(app, supports_credentials=True, origins=["https://batjuancrespo.github.io"])
 
 cipher_suite = Fernet(os.environ.get("ENCRYPTION_KEY").encode())
-
 CLIENT_SECRETS_FILE = 'client_secret.json'
 SCOPES = ['https://www.googleapis.com/auth/userinfo.email', 
         'https://www.googleapis.com/auth/userinfo.profile', 
         'https://www.googleapis.com/auth/spreadsheets', 
         'openid']
 
-# (El resto del archivo es exactamente igual, no ha cambiado)
+# --- NUEVA LÓGICA DE TOKENS JWT ---
+def create_access_token(data):
+    to_encode = data.copy()
+    # El token será válido por 24 horas
+    expire = datetime.datetime.utcnow() + datetime.timedelta(hours=24)
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, app.secret_key, algorithm="HS256")
+    return encoded_jwt
 
-# --- FUNCIONES DE BASE DE DATOS Y CIFRADO ---
+# "Decorador" para proteger rutas. Comprueba si el token es válido.
+def token_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        token = None
+        if 'Authorization' in request.headers:
+            # El token debe venir en el formato "Bearer [token]"
+            try:
+                token = request.headers['Authorization'].split(" ")[1]
+            except IndexError:
+                return jsonify({'message': 'Formato de token incorrecto'}), 401
+        
+        if not token:
+            return jsonify({'message': 'Falta el token de autorización'}), 401
+
+        try:
+            # Decodificamos el token. Si es inválido o ha expirado, dará un error.
+            data = jwt.decode(token, app.secret_key, algorithms=["HS256"])
+            # Guardamos el email del usuario en el contexto de la petición actual
+            request.current_user_email = data['email']
+        except jwt.ExpiredSignatureError:
+            return jsonify({'message': 'El token ha expirado'}), 401
+        except:
+            return jsonify({'message': 'El token no es válido'}), 401
+        
+        return f(*args, **kwargs)
+    return decorated
+
+# --- FUNCIONES DE BASE DE DATOS (Sin cambios) ---
 def get_db_connection():
     conn = psycopg2.connect(os.environ.get("DATABASE_URL"))
     return conn
-
-def get_user(email):
-    conn = get_db_connection()
-    cur = conn.cursor()
-    cur.execute("SELECT * FROM users WHERE email = %s;", (email,))
-    user = cur.fetchone()
-    cur.close()
-    conn.close()
-    return user
 
 def save_user_credentials(email, credentials):
     encrypted_credentials = cipher_suite.encrypt(credentials.to_json().encode())
@@ -78,25 +94,22 @@ def load_credentials_from_db(email):
         return Credentials.from_authorized_user_info(json.loads(decrypted_credentials))
     return None
 
-# --- RUTAS DE AUTENTICACIÓN ---
+# --- RUTAS DE AUTENTICACIÓN (Lógica de callback modificada) ---
 @app.route('/login')
 def login():
     flow = Flow.from_client_secrets_file(
         CLIENT_SECRETS_FILE, scopes=SCOPES,
         redirect_uri=url_for('callback', _external=True))
     authorization_url, state = flow.authorization_url()
-    session['state'] = state
     return redirect(authorization_url)
 
 @app.route('/callback')
 def callback():
-    state = session['state']
     flow = Flow.from_client_secrets_file(
-        CLIENT_SECRETS_FILE, scopes=SCOPES, state=state,
+        CLIENT_SECRETS_FILE, scopes=SCOPES,
         redirect_uri=url_for('callback', _external=True))
     
     flow.fetch_token(authorization_response=request.url)
-    
     credentials = flow.credentials
     
     try:
@@ -107,34 +120,29 @@ def callback():
         return "Invalid token", 401
 
     user_email = profile_info.get("email")
-    session['email'] = user_email
-    
     save_user_credentials(user_email, credentials)
     
-    return redirect(os.environ.get("FRONTEND_URL") + "/dashboard.html")
+    # Creamos nuestro token de acceso con el email del usuario
+    access_token = create_access_token(data={"email": user_email})
+    
+    # Redirigimos al frontend, pasando el token en el "hash" de la URL (después del #)
+    frontend_url = os.environ.get("FRONTEND_URL").rstrip('/')
+    return redirect(f"{frontend_url}/dashboard.html#token={access_token}")
 
-@app.route('/logout')
-def logout():
-    session.clear()
-    return redirect(os.environ.get("FRONTEND_URL"))
-
-# --- RUTAS DE LA API ---
+# --- RUTAS DE LA API (Protegidas con el decorador @token_required) ---
 @app.route('/api/profile')
+@token_required
 def profile():
-    if 'email' in session:
-        return jsonify({'logged_in': True, 'email': session['email']})
-    return jsonify({'logged_in': False})
+    return jsonify({'logged_in': True, 'email': request.current_user_email})
 
 @app.route('/api/process-image', methods=['POST'])
+@token_required
 def process_image():
-    if 'email' not in session:
-        return jsonify({'error': 'No autorizado'}), 401
-    
     if 'image' not in request.files or 'sheetId' not in request.form:
         return jsonify({'error': 'Falta imagen o ID de la hoja de cálculo'}), 400
 
     try:
-        email = session['email']
+        email = request.current_user_email
         sheet_id = request.form['sheetId']
         file_storage = request.files['image']
 
@@ -144,7 +152,6 @@ def process_image():
 
         image_bytes = file_storage.read()
         image = Image.open(io.BytesIO(image_bytes))
-        
         texto_extraido = pytesseract.image_to_string(image, lang='spa')
 
         if not texto_extraido.strip():
@@ -167,8 +174,8 @@ def process_image():
     except Exception as e:
         print(f"Error en /api/process-image: {e}")
         return jsonify({'error': 'Ocurrió un error interno al procesar la imagen.'}), 500
-
-# --- RUTA PRINCIPAL ---
+        
+# --- RUTA PRINCIPAL (Sin cambios) ---
 @app.route('/')
 def index():
     return "Backend del Lector IA funcionando."

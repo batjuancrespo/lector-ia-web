@@ -1,8 +1,27 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard - Lector IA</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <h1>Panel del Lector IA</h1>
+        <p class="user-info" id="user-info">Cargando...</p>
+        
+        <input type="text" id="sheetIdInput" placeholder="Pega el ID de tu Google Sheet aquí">
+        <input type="file" id="imageInput" accept="image/*">
+        <img id="preview" alt="Vista previa de la imagen">
+        
+        <button id="uploadButton" disabled>1. Selecciona Imagen y Sheet ID</button>
+        <p id="status"></p>
         <a id="logout-button" class="button" style="background-color: #e44d3a;">Cerrar Sesión</a>
     </div>
 
     <script>
-        // ¡IMPORTANTE! Esta URL debe ser la misma que en index.html
+        // El CÓDIGO JavaScript empieza aquí
         const BACKEND_URL = "https://lector-ia-web.onrender.com"; 
 
         const userInfo = document.getElementById('user-info');
@@ -14,90 +33,99 @@
         const status = document.getElementById('status');
         let selectedFile;
 
-        // --- LÓGICA PRINCIPAL MEJORADA ---
+        // --- NUEVA LÓGICA DE TOKENS EN EL FRONTEND ---
         async function checkLoginStatus() {
+            // 1. Coge el token del almacenamiento local del navegador
+            const token = localStorage.getItem('accessToken');
+
+            // 2. Si no hay ningún token guardado, redirige a la página de inicio
+            if (!token) {
+                console.log("No hay token. Redirigiendo a index.html...");
+                window.location.href = 'index.html';
+                return;
+            }
+
             try {
-                // Hacemos la petición para ver si estamos logueados
-                const profileRes = await fetch(`${BACKEND_URL}/api/profile`, { credentials: 'include' });
-                
-                // Si la petición falla por cualquier razón (CORS, red, etc.), lanzará un error
+                // 3. Pide el perfil ENVIANDO el token en las cabeceras de la petición
+                const profileRes = await fetch(`${BACKEND_URL}/api/profile`, {
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    }
+                });
+
                 if (!profileRes.ok) {
-                    throw new Error(`La petición de perfil falló con estado: ${profileRes.status}`);
+                    // Si el backend dice que el token es inválido (error 401), lo borramos y redirigimos
+                    localStorage.removeItem('accessToken'); 
+                    throw new Error("Token no válido o expirado.");
                 }
 
                 const data = await profileRes.json();
-
-                // Si el backend dice que no estamos logueados, redirigimos
-                if (!data.logged_in) {
-                    console.log("El backend dice: No logueado. Redirigiendo a index.html...");
-                    window.location.href = 'index.html';
-                    return;
-                }
                 
-                // Si todo está bien, mostramos la info del usuario
-                console.log("El backend dice: Logueado. Mostrando dashboard.");
+                // 4. Si el token es válido, mostramos el dashboard
+                console.log("Token válido. Mostrando dashboard.");
                 userInfo.textContent = `Sesión iniciada como: ${data.email}`;
-                logoutButton.href = `${BACKEND_URL}/logout`;
+                
+                // El botón de logout ahora debe borrar el token y redirigir
+                logoutButton.addEventListener('click', () => {
+                    localStorage.removeItem('accessToken');
+                    window.location.href = 'index.html';
+                });
 
             } catch (error) {
-                // Si hay CUALQUIER error al contactar al backend, asumimos que no estamos logueados
-                // y redirigimos. Esto previene que la página se quede en "Cargando..."
-                console.error("Error al comprobar el estado del login:", error);
-                console.log("Error al contactar el backend. Redirigiendo a index.html...");
+                console.error("Error al validar el token:", error);
                 window.location.href = 'index.html';
             }
         }
 
         document.addEventListener('DOMContentLoaded', () => {
-            // Esperamos 100 milisegundos antes de comprobar el login.
-            // Esto le da al navegador un respiro para procesar la cookie
-            // que acaba de recibir de la redirección del backend.
-            setTimeout(checkLoginStatus, 100);
+            // Al cargar la página, comprobamos si la URL contiene un token (ej: #token=...)
+            const hash = window.location.hash;
+            if (hash && hash.startsWith('#token=')) {
+                // Si lo contiene, lo extraemos...
+                const token = hash.substring(7); // Quita el '#token=' del principio
+                // ...lo guardamos en el almacenamiento local...
+                localStorage.setItem('accessToken', token);
+                // ...y limpiamos la URL para que el token no se vea
+                window.location.hash = ''; 
+            }
+
+            // Finalmente, comprobamos el estado del login
+            checkLoginStatus();
         });
         
-        // El resto de la lógica de la página (listeners de botones, etc.) no cambia
-
-        function checkFormState() {
-            if (selectedFile && sheetIdInput.value.trim() !== '') {
-                uploadButton.disabled = false;
-                uploadButton.textContent = 'Procesar y Guardar Datos';
-            } else {
-                uploadButton.disabled = true;
-                uploadButton.textContent = '1. Selecciona Imagen y Sheet ID';
-            }
-        }
-
-        imageInput.addEventListener('change', (event) => {
-            selectedFile = event.target.files[0];
-            if (selectedFile) {
-                preview.src = URL.createObjectURL(selectedFile);
-                preview.style.display = 'block';
-            }
-            checkFormState();
-        });
-
+        // --- Lógica de la interfaz de usuario (casi sin cambios) ---
+        function checkFormState() { if (selectedFile && sheetIdInput.value.trim() !== '') { uploadButton.disabled = false; uploadButton.textContent = 'Procesar y Guardar Datos'; } else { uploadButton.disabled = true; uploadButton.textContent = '1. Selecciona Imagen y Sheet ID'; } }
+        imageInput.addEventListener('change', (event) => { selectedFile = event.target.files[0]; if (selectedFile) { preview.src = URL.createObjectURL(selectedFile); preview.style.display = 'block'; } checkFormState(); });
         sheetIdInput.addEventListener('input', checkFormState);
 
         uploadButton.addEventListener('click', async () => {
             if (!selectedFile || !sheetIdInput.value) return;
 
-            uploadButton.disabled = true;
-            status.textContent = 'Subiendo y procesando... Esto puede tardar un momento.';
-            status.style.color = '#1877f2';
+            const token = localStorage.getItem('accessToken');
+            if (!token) {
+                alert("Error de sesión. Por favor, inicia sesión de nuevo.");
+                window.location.href = 'index.html';
+                return;
+            }
 
+            uploadButton.disabled = true;
+            status.textContent = 'Subiendo y procesando...';
+            
             const formData = new FormData();
             formData.append('image', selectedFile);
             formData.append('sheetId', sheetIdInput.value.trim());
 
             try {
+                // Añadimos la cabecera de Autorización con el token al enviar la imagen
                 const response = await fetch(`${BACKEND_URL}/api/process-image`, {
                     method: 'POST',
-                    body: formData,
-                    credentials: 'include'
+                    headers: {
+                        'Authorization': `Bearer ${token}`
+                    },
+                    body: formData
                 });
 
                 const result = await response.json();
-
                 if (response.ok) {
                     status.textContent = result.message;
                     status.style.color = 'green';
