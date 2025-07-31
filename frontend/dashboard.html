@@ -1,110 +1,118 @@
-// ¡IMPORTANTE! Esta URL debe ser la misma que en index.html
-const BACKEND_URL = "https://lector-ia-web.onrender.com"; 
+        <a id="logout-button" class="button" style="background-color: #e44d3a;">Cerrar Sesión</a>
+    </div>
 
-const userInfo = document.getElementById('user-info');
-const logoutButton = document.getElementById('logout-button');
-const imageInput = document.getElementById('imageInput');
-const sheetIdInput = document.getElementById('sheetIdInput');
-const preview = document.getElementById('preview');
-const uploadButton = document.getElementById('uploadButton');
-const status = document.getElementById('status');
-let selectedFile;
+    <script>
+        // ¡IMPORTANTE! Esta URL debe ser la misma que en index.html
+        const BACKEND_URL = "https://lector-ia-web.onrender.com"; 
 
-// --- LÓGICA PRINCIPAL MEJORADA ---
-async function checkLoginStatus() {
-    try {
-        // Hacemos la petición para ver si estamos logueados
-        const profileRes = await fetch(`${BACKEND_URL}/api/profile`, { credentials: 'include' });
-        
-        // Si la petición falla por cualquier razón (CORS, red, etc.), lanzará un error
-        if (!profileRes.ok) {
-            throw new Error(`La petición de perfil falló con estado: ${profileRes.status}`);
+        const userInfo = document.getElementById('user-info');
+        const logoutButton = document.getElementById('logout-button');
+        const imageInput = document.getElementById('imageInput');
+        const sheetIdInput = document.getElementById('sheetIdInput');
+        const preview = document.getElementById('preview');
+        const uploadButton = document.getElementById('uploadButton');
+        const status = document.getElementById('status');
+        let selectedFile;
+
+        // --- LÓGICA PRINCIPAL MEJORADA ---
+        async function checkLoginStatus() {
+            try {
+                // Hacemos la petición para ver si estamos logueados
+                const profileRes = await fetch(`${BACKEND_URL}/api/profile`, { credentials: 'include' });
+                
+                // Si la petición falla por cualquier razón (CORS, red, etc.), lanzará un error
+                if (!profileRes.ok) {
+                    throw new Error(`La petición de perfil falló con estado: ${profileRes.status}`);
+                }
+
+                const data = await profileRes.json();
+
+                // Si el backend dice que no estamos logueados, redirigimos
+                if (!data.logged_in) {
+                    console.log("El backend dice: No logueado. Redirigiendo a index.html...");
+                    window.location.href = 'index.html';
+                    return;
+                }
+                
+                // Si todo está bien, mostramos la info del usuario
+                console.log("El backend dice: Logueado. Mostrando dashboard.");
+                userInfo.textContent = `Sesión iniciada como: ${data.email}`;
+                logoutButton.href = `${BACKEND_URL}/logout`;
+
+            } catch (error) {
+                // Si hay CUALQUIER error al contactar al backend, asumimos que no estamos logueados
+                // y redirigimos. Esto previene que la página se quede en "Cargando..."
+                console.error("Error al comprobar el estado del login:", error);
+                console.log("Error al contactar el backend. Redirigiendo a index.html...");
+                window.location.href = 'index.html';
+            }
         }
 
-        const data = await profileRes.json();
-
-        // Si el backend dice que no estamos logueados, redirigimos
-        if (!data.logged_in) {
-            console.log("El backend dice: No logueado. Redirigiendo a index.html...");
-            window.location.href = 'index.html';
-            return;
-        }
+        document.addEventListener('DOMContentLoaded', () => {
+            // Esperamos 100 milisegundos antes de comprobar el login.
+            // Esto le da al navegador un respiro para procesar la cookie
+            // que acaba de recibir de la redirección del backend.
+            setTimeout(checkLoginStatus, 100);
+        });
         
-        // Si todo está bien, mostramos la info del usuario
-        console.log("El backend dice: Logueado. Mostrando dashboard.");
-        userInfo.textContent = `Sesión iniciada como: ${data.email}`;
-        logoutButton.href = `${BACKEND_URL}/logout`;
+        // El resto de la lógica de la página (listeners de botones, etc.) no cambia
 
-    } catch (error) {
-        // Si hay CUALQUIER error al contactar al backend, asumimos que no estamos logueados
-        // y redirigimos. Esto previene que la página se quede en "Cargando..."
-        console.error("Error al comprobar el estado del login:", error);
-        console.log("Error al contactar el backend. Redirigiendo a index.html...");
-        window.location.href = 'index.html';
-    }
-}
+        function checkFormState() {
+            if (selectedFile && sheetIdInput.value.trim() !== '') {
+                uploadButton.disabled = false;
+                uploadButton.textContent = 'Procesar y Guardar Datos';
+            } else {
+                uploadButton.disabled = true;
+                uploadButton.textContent = '1. Selecciona Imagen y Sheet ID';
+            }
+        }
 
-document.addEventListener('DOMContentLoaded', () => {
-    // Esperamos 100 milisegundos antes de comprobar el login.
-    // Esto le da al navegador un respiro para procesar la cookie
-    // que acaba de recibir de la redirección del backend.
-    setTimeout(checkLoginStatus, 100);
-});
-
-// El resto de la lógica de la página (listeners de botones, etc.) no cambia
-
-function checkFormState() {
-    if (selectedFile && sheetIdInput.value.trim() !== '') {
-        uploadButton.disabled = false;
-        uploadButton.textContent = 'Procesar y Guardar Datos';
-    } else {
-        uploadButton.disabled = true;
-        uploadButton.textContent = '1. Selecciona Imagen y Sheet ID';
-    }
-}
-
-imageInput.addEventListener('change', (event) => {
-    selectedFile = event.target.files[0];
-    if (selectedFile) {
-        preview.src = URL.createObjectURL(selectedFile);
-        preview.style.display = 'block';
-    }
-    checkFormState();
-});
-
-sheetIdInput.addEventListener('input', checkFormState);
-
-uploadButton.addEventListener('click', async () => {
-    if (!selectedFile || !sheetIdInput.value) return;
-
-    uploadButton.disabled = true;
-    status.textContent = 'Subiendo y procesando... Esto puede tardar un momento.';
-    status.style.color = '#1877f2';
-
-    const formData = new FormData();
-    formData.append('image', selectedFile);
-    formData.append('sheetId', sheetIdInput.value.trim());
-
-    try {
-        const response = await fetch(`${BACKEND_URL}/api/process-image`, {
-            method: 'POST',
-            body: formData,
-            credentials: 'include'
+        imageInput.addEventListener('change', (event) => {
+            selectedFile = event.target.files[0];
+            if (selectedFile) {
+                preview.src = URL.createObjectURL(selectedFile);
+                preview.style.display = 'block';
+            }
+            checkFormState();
         });
 
-        const result = await response.json();
+        sheetIdInput.addEventListener('input', checkFormState);
 
-        if (response.ok) {
-            status.textContent = result.message;
-            status.style.color = 'green';
-        } else {
-            status.textContent = `Error: ${result.error}`;
-            status.style.color = 'red';
-        }
-    } catch (error) {
-        status.textContent = 'Error de conexión con el servidor.';
-        status.style.color = 'red';
-    } finally {
-        uploadButton.disabled = false;
-    }
-});
+        uploadButton.addEventListener('click', async () => {
+            if (!selectedFile || !sheetIdInput.value) return;
+
+            uploadButton.disabled = true;
+            status.textContent = 'Subiendo y procesando... Esto puede tardar un momento.';
+            status.style.color = '#1877f2';
+
+            const formData = new FormData();
+            formData.append('image', selectedFile);
+            formData.append('sheetId', sheetIdInput.value.trim());
+
+            try {
+                const response = await fetch(`${BACKEND_URL}/api/process-image`, {
+                    method: 'POST',
+                    body: formData,
+                    credentials: 'include'
+                });
+
+                const result = await response.json();
+
+                if (response.ok) {
+                    status.textContent = result.message;
+                    status.style.color = 'green';
+                } else {
+                    status.textContent = `Error: ${result.error}`;
+                    status.style.color = 'red';
+                }
+            } catch (error) {
+                status.textContent = 'Error de conexión con el servidor.';
+                status.style.color = 'red';
+            } finally {
+                uploadButton.disabled = false;
+            }
+        });
+    </script>
+
+</body>
+</html>
