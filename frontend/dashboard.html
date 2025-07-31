@@ -5,142 +5,243 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Dashboard - Lector IA</title>
     <link rel="stylesheet" href="style.css">
+    <style>
+        /* Estilos adicionales para la nueva interfaz */
+        .section { border-top: 1px solid #ddd; margin-top: 20px; padding-top: 20px; }
+        #results-form .form-group { margin-bottom: 10px; text-align: left; }
+        #results-form label { font-weight: bold; display: block; margin-bottom: 5px; }
+        #results-form input { width: calc(100% - 22px); }
+        select { width: 100%; padding: 10px; margin-top: 15px; border-radius: 6px; }
+    </style>
 </head>
 <body>
     <div class="container">
         <h1>Panel del Lector IA</h1>
         <p class="user-info" id="user-info">Cargando...</p>
+        <a id="logout-button" class="button" style="background-color: #e44d3a; display: none;">Cerrar Sesión</a>
         
-        <input type="text" id="sheetIdInput" placeholder="Pega el ID de tu Google Sheet aquí">
-        <input type="file" id="imageInput" accept="image/*">
-        <img id="preview" alt="Vista previa de la imagen">
-        
-        <button id="uploadButton" disabled>1. Selecciona Imagen y Sheet ID</button>
+        <!-- SECCIÓN 1: GESTIÓN DE SHEETS -->
+        <div class="section">
+            <h2>1. Selecciona o Añade una Hoja de Cálculo</h2>
+            <div id="sheets-loader" style="display: none;">Cargando tus sheets...</div>
+            <select id="sheets-dropdown" style="display: none;"></select>
+            <div id="add-sheet-form">
+                <input type="text" id="new-sheet-id" placeholder="Pega el ID de una nueva Google Sheet">
+                <button id="add-sheet-btn">Añadir y Analizar Sheet</button>
+            </div>
+        </div>
+
+        <!-- SECCIÓN 2: SUBIR IMAGEN -->
+        <div id="upload-section" class="section" style="display: none;">
+            <h2>2. Sube una Imagen para Extraer Datos</h2>
+            <input type="file" id="imageInput" accept="image/*">
+            <img id="preview" alt="Vista previa de la imagen">
+            <button id="extract-btn" disabled>Extraer Datos</button>
+        </div>
+
+        <!-- SECCIÓN 3: VERIFICAR Y GUARDAR DATOS -->
+        <div id="results-section" class="section" style="display: none;">
+            <h2>3. Verifica los Datos Extraídos</h2>
+            <form id="results-form"></form> <!-- Los campos se generarán aquí -->
+            <button id="save-btn">Guardar en Sheet</button>
+        </div>
+
         <p id="status"></p>
-        <a id="logout-button" class="button" style="background-color: #e44d3a;">Cerrar Sesión</a>
     </div>
 
     <script>
-        // El CÓDIGO JavaScript empieza aquí
-        const BACKEND_URL = "https://lector-ia-web.onrender.com"; 
-
+        const BACKEND_URL = "https://lector-ia-web.onrender.com";
+        // Obtenemos los elementos del DOM
         const userInfo = document.getElementById('user-info');
         const logoutButton = document.getElementById('logout-button');
+        const sheetsLoader = document.getElementById('sheets-loader');
+        const sheetsDropdown = document.getElementById('sheets-dropdown');
+        const addSheetForm = document.getElementById('add-sheet-form');
+        const newSheetIdInput = document.getElementById('new-sheet-id');
+        const addSheetBtn = document.getElementById('add-sheet-btn');
+        const uploadSection = document.getElementById('upload-section');
         const imageInput = document.getElementById('imageInput');
-        const sheetIdInput = document.getElementById('sheetIdInput');
         const preview = document.getElementById('preview');
-        const uploadButton = document.getElementById('uploadButton');
+        const extractBtn = document.getElementById('extract-btn');
+        const resultsSection = document.getElementById('results-section');
+        const resultsForm = document.getElementById('results-form');
+        const saveBtn = document.getElementById('save-btn');
         const status = document.getElementById('status');
-        let selectedFile;
+        
+        let token = null;
+        let userSheets = [];
+        let currentSelectedSheet = null;
+        let extractedData = null;
 
-        // --- NUEVA LÓGICA DE TOKENS EN EL FRONTEND ---
-        async function checkLoginStatus() {
-            // 1. Coge el token del almacenamiento local del navegador
-            const token = localStorage.getItem('accessToken');
-
-            // 2. Si no hay ningún token guardado, redirige a la página de inicio
-            if (!token) {
-                console.log("No hay token. Redirigiendo a index.html...");
-                window.location.href = 'index.html';
-                return;
+        // --- LÓGICA PRINCIPAL ---
+        document.addEventListener('DOMContentLoaded', () => {
+            const hash = window.location.hash;
+            if (hash && hash.startsWith('#token=')) {
+                token = hash.substring(7);
+                localStorage.setItem('accessToken', token);
+                window.location.hash = '';
+            } else {
+                token = localStorage.getItem('accessToken');
             }
 
-            try {
-                // 3. Pide el perfil ENVIANDO el token en las cabeceras de la petición
-                const profileRes = await fetch(`${BACKEND_URL}/api/profile`, {
-                    headers: {
-                        'Authorization': `Bearer ${token}`
-                    }
-                });
-
-                if (!profileRes.ok) {
-                    // Si el backend dice que el token es inválido (error 401), lo borramos y redirigimos
-                    localStorage.removeItem('accessToken'); 
-                    throw new Error("Token no válido o expirado.");
-                }
-
-                const data = await profileRes.json();
-                
-                // 4. Si el token es válido, mostramos el dashboard
-                console.log("Token válido. Mostrando dashboard.");
-                userInfo.textContent = `Sesión iniciada como: ${data.email}`;
-                
-                // El botón de logout ahora debe borrar el token y redirigir
-                logoutButton.addEventListener('click', () => {
-                    localStorage.removeItem('accessToken');
-                    window.location.href = 'index.html';
-                });
-
-            } catch (error) {
-                console.error("Error al validar el token:", error);
+            if (!token) {
                 window.location.href = 'index.html';
+            } else {
+                userInfo.textContent = "Verificando sesión...";
+                loadUserSheets();
+            }
+        });
+
+        // --- FUNCIONES DE LA APP ---
+        async function apiFetch(endpoint, options = {}) {
+            options.headers = { ...options.headers, 'Authorization': `Bearer ${token}` };
+            const response = await fetch(`${BACKEND_URL}${endpoint}`, options);
+            if (response.status === 401) { // Token inválido o expirado
+                localStorage.removeItem('accessToken');
+                window.location.href = 'index.html';
+                throw new Error("No autorizado");
+            }
+            return response;
+        }
+
+        async function loadUserSheets() {
+            sheetsLoader.style.display = 'block';
+            try {
+                const response = await apiFetch('/api/sheets');
+                userSheets = await response.json();
+                
+                userInfo.textContent = "¡Bienvenido!"; // Placeholder, se puede poner el email del token
+                logoutButton.style.display = 'inline-block';
+                
+                if (userSheets.length > 0) {
+                    populateSheetsDropdown();
+                    sheetsDropdown.style.display = 'block';
+                    handleSheetSelection();
+                } else {
+                    userInfo.textContent += " Añade tu primera Sheet para empezar.";
+                }
+            } catch (e) {
+                status.textContent = "Error al cargar tus sheets.";
+            } finally {
+                sheetsLoader.style.display = 'none';
             }
         }
 
-        document.addEventListener('DOMContentLoaded', () => {
-            // Al cargar la página, comprobamos si la URL contiene un token (ej: #token=...)
-            const hash = window.location.hash;
-            if (hash && hash.startsWith('#token=')) {
-                // Si lo contiene, lo extraemos...
-                const token = hash.substring(7); // Quita el '#token=' del principio
-                // ...lo guardamos en el almacenamiento local...
-                localStorage.setItem('accessToken', token);
-                // ...y limpiamos la URL para que el token no se vea
-                window.location.hash = ''; 
-            }
+        function populateSheetsDropdown() {
+            sheetsDropdown.innerHTML = userSheets.map(s => `<option value="${s.sheet_id}">${s.sheet_name}</option>`).join('');
+        }
 
-            // Finalmente, comprobamos el estado del login
-            checkLoginStatus();
+        function handleSheetSelection() {
+            const selectedId = sheetsDropdown.value;
+            currentSelectedSheet = userSheets.find(s => s.sheet_id === selectedId);
+            uploadSection.style.display = 'block';
+            resultsSection.style.display = 'none'; // Ocultar resultados anteriores
+            imageInput.value = ''; // Limpiar input de imagen
+            extractBtn.disabled = true;
+        }
+
+        addSheetBtn.addEventListener('click', async () => {
+            const newSheetId = newSheetIdInput.value.trim();
+            if (!newSheetId) { alert("Por favor, introduce un ID de Sheet."); return; }
+            
+            status.textContent = "Analizando nueva sheet...";
+            addSheetBtn.disabled = true;
+            try {
+                const response = await apiFetch('/api/sheets', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ sheet_id: newSheetId })
+                });
+                if (!response.ok) throw new Error("No se pudo analizar la sheet.");
+                
+                newSheetIdInput.value = '';
+                status.textContent = "¡Sheet añadida con éxito!";
+                loadUserSheets(); // Recargar la lista
+            } catch (e) {
+                const error = await response.json();
+                status.textContent = `Error: ${error.error}`;
+            } finally {
+                addSheetBtn.disabled = false;
+            }
         });
-        
-        // --- Lógica de la interfaz de usuario (casi sin cambios) ---
-        function checkFormState() { if (selectedFile && sheetIdInput.value.trim() !== '') { uploadButton.disabled = false; uploadButton.textContent = 'Procesar y Guardar Datos'; } else { uploadButton.disabled = true; uploadButton.textContent = '1. Selecciona Imagen y Sheet ID'; } }
-        imageInput.addEventListener('change', (event) => { selectedFile = event.target.files[0]; if (selectedFile) { preview.src = URL.createObjectURL(selectedFile); preview.style.display = 'block'; } checkFormState(); });
-        sheetIdInput.addEventListener('input', checkFormState);
 
-        uploadButton.addEventListener('click', async () => {
-            if (!selectedFile || !sheetIdInput.value) return;
+        sheetsDropdown.addEventListener('change', handleSheetSelection);
+        imageInput.addEventListener('change', () => { extractBtn.disabled = !imageInput.files[0]; });
 
-            const token = localStorage.getItem('accessToken');
-            if (!token) {
-                alert("Error de sesión. Por favor, inicia sesión de nuevo.");
-                window.location.href = 'index.html';
-                return;
-            }
-
-            uploadButton.disabled = true;
-            status.textContent = 'Subiendo y procesando...';
+        extractBtn.addEventListener('click', async () => {
+            if (!imageInput.files[0] || !currentSelectedSheet) return;
+            
+            status.textContent = "Extrayendo datos con IA... Esto puede tardar unos segundos.";
+            extractBtn.disabled = true;
             
             const formData = new FormData();
-            formData.append('image', selectedFile);
-            formData.append('sheetId', sheetIdInput.value.trim());
-
+            formData.append('image', imageInput.files[0]);
+            formData.append('columns', JSON.stringify(currentSelectedSheet.columns));
+            
             try {
-                // Añadimos la cabecera de Autorización con el token al enviar la imagen
-                const response = await fetch(`${BACKEND_URL}/api/process-image`, {
-                    method: 'POST',
-                    headers: {
-                        'Authorization': `Bearer ${token}`
-                    },
-                    body: formData
-                });
-
-                const result = await response.json();
-                if (response.ok) {
-                    status.textContent = result.message;
-                    status.style.color = 'green';
-                } else {
-                    status.textContent = `Error: ${result.error}`;
-                    status.style.color = 'red';
-                }
-            } catch (error) {
-                status.textContent = 'Error de conexión con el servidor.';
-                status.style.color = 'red';
+                const response = await apiFetch('/api/extract', { method: 'POST', body: formData });
+                if (!response.ok) throw new Error("La extracción falló.");
+                
+                extractedData = await response.json();
+                displayResultsForm();
+                status.textContent = "Datos extraídos. Por favor, verifica.";
+            } catch (e) {
+                status.textContent = "Error durante la extracción.";
             } finally {
-                uploadButton.disabled = false;
+                extractBtn.disabled = false;
             }
         });
-    </script>
 
+        function displayResultsForm() {
+            resultsForm.innerHTML = ''; // Limpiar formulario anterior
+            for (const column of currentSelectedSheet.columns) {
+                const value = extractedData[column] || '';
+                const formGroup = document.createElement('div');
+                formGroup.className = 'form-group';
+                formGroup.innerHTML = `
+                    <label for="field-${column}">${column}</label>
+                    <input type="text" id="field-${column}" name="${column}" value="${value}">
+                `;
+                resultsForm.appendChild(formGroup);
+            }
+            resultsSection.style.display = 'block';
+        }
+
+        saveBtn.addEventListener('click', async () => {
+            const finalData = {};
+            for (const column of currentSelectedSheet.columns) {
+                finalData[column] = document.getElementById(`field-${column}`).value;
+            }
+            
+            status.textContent = "Guardando...";
+            saveBtn.disabled = true;
+
+            try {
+                const response = await apiFetch('/api/save', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        sheet_id: currentSelectedSheet.sheet_id,
+                        columns: currentSelectedSheet.columns,
+                        data: finalData
+                    })
+                });
+                if (!response.ok) throw new Error("No se pudo guardar.");
+                
+                status.textContent = "¡Datos guardados en Google Sheets con éxito!";
+                resultsSection.style.display = 'none';
+                imageInput.value = '';
+            } catch(e) {
+                status.textContent = "Error al guardar los datos.";
+            } finally {
+                saveBtn.disabled = false;
+            }
+        });
+
+        logoutButton.addEventListener('click', () => {
+            localStorage.removeItem('accessToken');
+            window.location.href = 'index.html';
+        });
+    </script>
 </body>
 </html>
