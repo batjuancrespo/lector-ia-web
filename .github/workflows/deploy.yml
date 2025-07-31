@@ -1,0 +1,49 @@
+# Nombre del workflow
+name: Deploy Frontend to GitHub Pages
+
+on:
+  # Se ejecuta cada vez que subes código a la rama 'main'
+  push:
+    branches: ["main"]
+
+  # Permite ejecutarlo manualmente desde la pestaña Actions
+  workflow_dispatch:
+
+# Permisos necesarios para que la acción pueda desplegar
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Configuración para evitar despliegues duplicados
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  # El trabajo que vamos a realizar se llama 'deploy'
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      # 1. Clona tu repositorio en el servidor de GitHub
+      - name: Checkout
+        uses: actions/checkout@v4
+      
+      # 2. Configura GitHub Pages
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      # 3. Empaqueta los archivos del sitio web
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          # Le decimos que busque los archivos DENTRO de la carpeta /frontend
+          path: './frontend'
+
+      # 4. Despliega el paquete en GitHub Pages
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
