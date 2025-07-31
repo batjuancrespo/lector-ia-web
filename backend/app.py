@@ -13,7 +13,7 @@ import gspread
 import pytesseract
 from PIL import Image
 import io
-import jwt # <-- Nueva librería para tokens
+import jwt
 import datetime
 from functools import wraps
 
@@ -22,7 +22,6 @@ load_dotenv()
 os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
 
 app = Flask(__name__)
-# La clave secreta ahora se usará para firmar los tokens JWT
 app.secret_key = os.environ.get("FLASK_SECRET_KEY")
 CORS(app, supports_credentials=True, origins=["https://batjuancrespo.github.io"])
 
@@ -33,22 +32,19 @@ SCOPES = ['https://www.googleapis.com/auth/userinfo.email',
         'https://www.googleapis.com/auth/spreadsheets', 
         'openid']
 
-# --- NUEVA LÓGICA DE TOKENS JWT ---
+# --- LÓGICA DE TOKENS JWT ---
 def create_access_token(data):
     to_encode = data.copy()
-    # El token será válido por 24 horas
     expire = datetime.datetime.utcnow() + datetime.timedelta(hours=24)
     to_encode.update({"exp": expire})
     encoded_jwt = jwt.encode(to_encode, app.secret_key, algorithm="HS256")
     return encoded_jwt
 
-# "Decorador" para proteger rutas. Comprueba si el token es válido.
 def token_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
         token = None
         if 'Authorization' in request.headers:
-            # El token debe venir en el formato "Bearer [token]"
             try:
                 token = request.headers['Authorization'].split(" ")[1]
             except IndexError:
@@ -58,9 +54,7 @@ def token_required(f):
             return jsonify({'message': 'Falta el token de autorización'}), 401
 
         try:
-            # Decodificamos el token. Si es inválido o ha expirado, dará un error.
             data = jwt.decode(token, app.secret_key, algorithms=["HS256"])
-            # Guardamos el email del usuario en el contexto de la petición actual
             request.current_user_email = data['email']
         except jwt.ExpiredSignatureError:
             return jsonify({'message': 'El token ha expirado'}), 401
@@ -70,7 +64,7 @@ def token_required(f):
         return f(*args, **kwargs)
     return decorated
 
-# --- FUNCIONES DE BASE DE DATOS (Sin cambios) ---
+# --- FUNCIONES DE BASE DE DATOS ---
 def get_db_connection():
     conn = psycopg2.connect(os.environ.get("DATABASE_URL"))
     return conn
@@ -87,14 +81,22 @@ def save_user_credentials(email, credentials):
     cur.close()
     conn.close()
 
+# --- ¡¡¡ FUNCIÓN CORREGIDA !!! ---
 def load_credentials_from_db(email):
-    user = get_user(email)
-    if user:
-        decrypted_credentials = cipher_suite.decrypt(user[2].encode())
+    conn = get_db_connection()
+    cur = conn.cursor()
+    # Seleccionamos solo la columna de credenciales
+    cur.execute("SELECT credentials FROM users WHERE email = %s;", (email,))
+    user_data = cur.fetchone() # fetchone() devuelve una tupla
+    cur.close()
+    conn.close()
+    if user_data:
+        # user_data es una tupla, ej: ('texto_cifrado',). Accedemos al primer elemento.
+        decrypted_credentials = cipher_suite.decrypt(user_data[0].encode())
         return Credentials.from_authorized_user_info(json.loads(decrypted_credentials))
     return None
 
-# --- RUTAS DE AUTENTICACIÓN (Lógica de callback modificada) ---
+# --- RUTAS DE AUTENTICACIÓN ---
 @app.route('/login')
 def login():
     flow = Flow.from_client_secrets_file(
@@ -122,14 +124,12 @@ def callback():
     user_email = profile_info.get("email")
     save_user_credentials(user_email, credentials)
     
-    # Creamos nuestro token de acceso con el email del usuario
     access_token = create_access_token(data={"email": user_email})
     
-    # Redirigimos al frontend, pasando el token en el "hash" de la URL (después del #)
     frontend_url = os.environ.get("FRONTEND_URL").rstrip('/')
     return redirect(f"{frontend_url}/dashboard.html#token={access_token}")
 
-# --- RUTAS DE LA API (Protegidas con el decorador @token_required) ---
+# --- RUTAS DE LA API ---
 @app.route('/api/profile')
 @token_required
 def profile():
@@ -174,8 +174,7 @@ def process_image():
     except Exception as e:
         print(f"Error en /api/process-image: {e}")
         return jsonify({'error': 'Ocurrió un error interno al procesar la imagen.'}), 500
-        
-# --- RUTA PRINCIPAL (Sin cambios) ---
+            
 @app.route('/')
 def index():
     return "Backend del Lector IA funcionando."
