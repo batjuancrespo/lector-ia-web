@@ -116,7 +116,7 @@ def login():
     flow = Flow.from_client_secrets_file(
         CLIENT_SECRETS_FILE, scopes=SCOPES,
         redirect_uri=url_for('callback', _external=True))
-    authorization_url, state = flow.authorization_url()
+    authorization_url, state = flow.authorization_url(access_type='offline', prompt='consent')
     return redirect(authorization_url)
 
 @app.route('/callback')
