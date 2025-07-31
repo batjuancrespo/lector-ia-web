@@ -8,38 +8,34 @@ from flask_cors import CORS
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
 import google.auth.transport.requests
-from google.oauth2 import id_token  # <--- IMPORT ADICIONAL
+from google.oauth2 import id_token
 import gspread
-import easyocr
-import cv2
-import numpy as np
+
+### CAMBIO: Imports actualizados para Tesseract ###
+import pytesseract
+from PIL import Image
+import io
 
 # --- INICIALIZACIÓN Y CONFIGURACIÓN ---
 load_dotenv()
-
-# Permite el uso de HTTP (transporte inseguro) para las pruebas locales de OAuth.
 os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY")
 CORS(app, supports_credentials=True, origins=[os.environ.get("FRONTEND_URL")])
 
-# Configuración de cifrado
 cipher_suite = Fernet(os.environ.get("ENCRYPTION_KEY").encode())
 
-# Configuración de Google OAuth
 CLIENT_SECRETS_FILE = 'client_secret.json'
 SCOPES = ['https://www.googleapis.com/auth/userinfo.email', 
-          'https://www.googleapis.com/auth/userinfo.profile', 
-          'https://www.googleapis.com/auth/spreadsheets', 
-          'openid']
+        'https://www.googleapis.com/auth/userinfo.profile', 
+        'https://www.googleapis.com/auth/spreadsheets', 
+        'openid']
 
-# Inicializar EasyOCR (tarda un poco la primera vez)
-print("Cargando modelo de EasyOCR...")
-reader = easyocr.Reader(['es'], gpu=False) # gpu=False para asegurar compatibilidad en servidores sin GPU
-print("Modelo cargado.")
+### CAMBIO: Eliminada la inicialización de EasyOCR ###
+# Ya no se necesita cargar ningún modelo pesado al iniciar.
 
-# --- FUNCIONES DE BASE DE DATOS Y CIFRADO ---
+# --- FUNCIONES DE BASE DE DATOS Y CIFRADO (Sin cambios) ---
 def get_db_connection():
     conn = psycopg2.connect(os.environ.get("DATABASE_URL"))
     return conn
@@ -57,7 +53,6 @@ def save_user_credentials(email, credentials):
     encrypted_credentials = cipher_suite.encrypt(credentials.to_json().encode())
     conn = get_db_connection()
     cur = conn.cursor()
-    # UPSERT: Insertar o actualizar si el usuario ya existe
     cur.execute("""
         INSERT INTO users (email, credentials) VALUES (%s, %s)
         ON CONFLICT (email) DO UPDATE SET credentials = EXCLUDED.credentials;
@@ -73,7 +68,7 @@ def load_credentials_from_db(email):
         return Credentials.from_authorized_user_info(json.loads(decrypted_credentials))
     return None
 
-# --- RUTAS DE AUTENTICACIÓN ---
+# --- RUTAS DE AUTENTICACIÓN (Sin cambios) ---
 @app.route('/login')
 def login():
     flow = Flow.from_client_secrets_file(
@@ -94,20 +89,16 @@ def callback():
     
     credentials = flow.credentials
     
-    # ---- BLOQUE DE CÓDIGO CORREGIDO ----
-    # Decodificamos el id_token para obtener la información del perfil de forma segura
     try:
         profile_info = id_token.verify_oauth2_token(
             credentials.id_token, google.auth.transport.requests.Request(), flow.client_config['client_id']
         )
     except ValueError:
-        # El token no es válido
         return "Invalid token", 401
 
     user_email = profile_info.get("email")
     session['email'] = user_email
     
-    # Guardar credenciales cifradas en la BD
     save_user_credentials(user_email, credentials)
     
     return redirect(os.environ.get("FRONTEND_URL") + "/dashboard.html")
@@ -117,7 +108,7 @@ def logout():
     session.clear()
     return redirect(os.environ.get("FRONTEND_URL"))
 
-# --- RUTAS DE LA API ---
+# --- RUTAS DE LA API (Parte de process-image modificada) ---
 @app.route('/api/profile')
 def profile():
     if 'email' in session:
@@ -141,15 +132,25 @@ def process_image():
         if not credentials:
             return jsonify({'error': 'No se pudieron cargar las credenciales'}), 500
 
-        np_img = np.frombuffer(file_storage.read(), np.uint8)
-        image = cv2.imdecode(np_img, cv2.IMREAD_GRAYSCALE)
-        results = reader.readtext(image, detail=1)
+        ### CAMBIO: Lógica de OCR actualizada a Tesseract ###
+        # 1. Procesamiento de Imagen y OCR con Tesseract
+        image_bytes = file_storage.read()
+        image = Image.open(io.BytesIO(image_bytes))
+        
+        # Usamos pytesseract para extraer el texto, especificando el idioma español ('spa')
+        texto_extraido = pytesseract.image_to_string(image, lang='spa')
 
-        if not results:
+        if not texto_extraido.strip():
             return jsonify({'message': 'No se detectó texto en la imagen.'})
 
-        data_to_save = [[box[1]] for box in results]
+        # 2. Estructurar datos (cada línea del texto es una fila en la hoja de cálculo)
+        # Filtramos líneas vacías que a veces Tesseract puede generar.
+        data_to_save = [[line] for line in texto_extraido.split('\n') if line.strip()]
 
+        if not data_to_save:
+             return jsonify({'message': 'No se encontró texto estructurado para guardar.'})
+
+        # 3. Guardar en Google Sheets
         gc = gspread.authorize(credentials)
         spreadsheet = gc.open_by_key(sheet_id)
         worksheet = spreadsheet.sheet1
@@ -163,7 +164,7 @@ def process_image():
         print(f"Error en /api/process-image: {e}")
         return jsonify({'error': 'Ocurrió un error interno al procesar la imagen.'}), 500
 
-# --- RUTA PRINCIPAL (OPCIONAL) ---
+# --- RUTA PRINCIPAL (Sin cambios) ---
 @app.route('/')
 def index():
     return "Backend del Lector IA funcionando."

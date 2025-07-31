@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: mi-lector-ia-backend 
+    env: python
+    plan: free
+    region: frankfurt # Tu región
+    rootDir: backend
+    buildFilter:
+      paths:
+        - "backend/**" # Re-desplegar si algo cambia en la carpeta backend
+    buildPacks: # ---> ¡ESTA ES LA MAGIA! <---
+      - url: https://github.com/render-examples/apt-buildpack
+    build_command: "pip install -r requirements.txt"
+    start_command: "gunicorn 'app:app'"
+    env_vars:
+      - key: PYTHON_VERSION
+        value: 3.10.11
+      - key: FRONTEND_URL
+        value: "https://batjuancrespo.github.io/lector-ia-web/" # ¡CONFIRMA QUE ESTA ES LA URL DE TU GITHUB PAGES!
+      # --- CLAVES SECRETAS ---
+      # Estas las vamos a gestionar desde el dashboard para no subirlas a GitHub.
+      # Render las unirá con este archivo.

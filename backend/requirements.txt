@@ -5,8 +5,7 @@ psycopg2-binary
 python-dotenv
 gunicorn
 Flask-Cors
-easyocr
-opencv-python-headless
-pandas
+Pillow
+pytesseract
 gspread
 cryptography
