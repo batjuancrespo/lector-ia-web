@@ -17,11 +17,10 @@ import datetime
 from functools import wraps
 import traceback
 import google.generativeai as genai
-# --- NUEVAS LIBRERÍAS PARA GOOGLE DRIVE ---
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 
-# --- INICIALIZACIÓN Y CONFIGURACIÓN (Sin cambios) ---
+# --- INICIALIZACIÓN Y CONFIGURACIÓN ---
 load_dotenv()
 os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
 app = Flask(__name__)
@@ -40,12 +39,11 @@ except Exception as e:
 
 cipher_suite = Fernet(os.environ.get("ENCRYPTION_KEY").encode())
 CLIENT_SECRETS_FILE = 'client_secret.json'
-# --- ¡AÑADIMOS EL SCOPE DE DRIVE! ---
 SCOPES = ['https://www.googleapis.com/auth/userinfo.email', 
         'https://www.googleapis.com/auth/userinfo.profile', 
         'https://www.googleapis.com/auth/spreadsheets', 
         'openid',
-        'https://www.googleapis.com/auth/drive.file'] # Permiso para crear archivos en Drive
+        'https://www.googleapis.com/auth/drive.file']
     
 try:
     with open(CLIENT_SECRETS_FILE) as f:
@@ -55,7 +53,6 @@ except Exception as e:
     print(f"ERROR CRÍTICO al cargar Client ID: {e}")
     GOOGLE_CLIENT_ID = None
     
-# (Lógica de tokens y BD sin cambios)
 def create_access_token(data):
     expire = datetime.datetime.utcnow() + datetime.timedelta(hours=24)
     to_encode = data.copy()
@@ -101,33 +98,24 @@ def load_credentials_from_db(email):
         return Credentials.from_authorized_user_info(json.loads(decrypted_credentials))
     return None
 
-# --- NUEVA FUNCIÓN PARA SUBIR IMAGEN A GOOGLE DRIVE ---
 def upload_image_to_drive(credentials, image_bytes, filename):
     try:
         service = build('drive', 'v3', credentials=credentials)
-        
-        # Crear un buffer en memoria para la imagen
         image_io = io.BytesIO(image_bytes)
-        
         file_metadata = {'name': filename}
         media = MediaIoBaseUpload(image_io, mimetype='image/jpeg', resumable=True)
         
-        print(f"Subiendo '{filename}' a Google Drive...")
-        file = service.files().create(body=file_metadata, media_body=media, fields='id, webViewLink').execute()
-        print("Subida completada.")
+        file = service.files().create(body=file_metadata, media_body=media, fields='id').execute()
         
-        # Hacemos el archivo público para que se pueda ver en la sheet
         file_id = file.get('id')
         service.permissions().create(fileId=file_id, body={'type': 'anyone', 'role': 'reader'}).execute()
-        print("Permisos del archivo actualizados a público.")
         
-        return file.get('webViewLink')
+        # --- ¡CAMBIO 1! Devolvemos el ID, no el webViewLink ---
+        return file_id
     except Exception as e:
-        print(f"Error al subir a Google Drive: {e}")
         traceback.print_exc()
         return None
 
-# (Rutas de login/callback sin cambios)
 @app.route('/login')
 def login():
     flow = Flow.from_client_secrets_file(CLIENT_SECRETS_FILE, scopes=SCOPES, redirect_uri=url_for('callback', _external=True))
@@ -139,7 +127,6 @@ def login():
 def callback():
     state = session.pop('state', None)
     flow = Flow.from_client_secrets_file(CLIENT_SECRETS_FILE, scopes=SCOPES, state=state, redirect_uri=url_for('callback', _external=True))
-    # ... (el resto de la función es igual)
     flow.fetch_token(authorization_response=request.url)
     credentials = flow.credentials
     try:
@@ -151,11 +138,9 @@ def callback():
     frontend_url = os.environ.get("FRONTEND_URL").rstrip('/')
     return redirect(f"{frontend_url}/dashboard.html#token={access_token}")
 
-# (Rutas de gestión de sheets sin cambios)
 @app.route('/api/sheets', methods=['GET'])
 @token_required
 def get_user_sheets():
-    # ... (código igual)
     email = request.current_user_email
     conn = get_db_connection()
     cur = conn.cursor()
@@ -168,7 +153,6 @@ def get_user_sheets():
 @app.route('/api/sheets', methods=['POST'])
 @token_required
 def add_user_sheet():
-    # ... (código igual)
     email = request.current_user_email
     sheet_id = request.json.get('sheet_id')
     if not sheet_id: return jsonify({'error': 'Falta el sheet_id'}), 400
@@ -193,54 +177,28 @@ def add_user_sheet():
         traceback.print_exc()
         return jsonify({'error': 'Error interno al analizar la sheet'}), 500
         
-# --- RUTA DE EXTRACCIÓN CON IA MEJORADA PARA RADIOLOGÍA ---
 @app.route('/api/extract', methods=['POST'])
 @token_required
 def extract_data_from_image():
     if gemini_model is None: return jsonify({'error': 'IA no configurada'}), 500
     if 'image' not in request.files: return jsonify({'error': 'Falta imagen'}), 400
-    
     try:
         image_bytes = request.files['image'].read()
         image = Image.open(io.BytesIO(image_bytes))
-        
-        json_structure = {
-            "NOMBRE": "",
-            "APELLIDOS": "",
-            "ID": "",
-            "FECHA ESTUDIO": "",
-            "SECCION": "",
-            "TIPO DE ESTUDIO": ""
-        }
-        
-        prompt_text = f"""
-        Eres un asistente experto en analizar imágenes radiológicas para extraer metadatos.
-        Analiza la imagen adjunta, que es un estudio radiológico. Extrae la información para rellenar el siguiente objeto JSON.
-        - Para 'FECHA ESTUDIO', formatea la fecha como DD/MM/AAAA.
-        - Para 'SECCION', clasifica la imagen en una de estas categorías: Craneo, Cuello, Torax, Abdomen, Musculoesqueletico.
-        - Para 'TIPO DE ESTUDIO', clasifica el estudio en una de estas categorías: TAC, RM, ECO, OTROS.
-        Responde ÚNICAMENTE con el objeto JSON rellenado. No incluyas explicaciones ni formato de código.
-
-        JSON a rellenar:
-        {json.dumps(json_structure)}
-        """
-        
+        json_structure = {"NOMBRE": "","APELLIDOS": "","ID": "","FECHA ESTUDIO": "","SECCION": "","TIPO DE ESTUDIO": ""}
+        prompt_text = f"Analiza la imagen radiológica y extrae los metadatos para rellenar este JSON. SECCION debe ser una de: Craneo, Cuello, Torax, Abdomen, Musculoesqueletico. TIPO DE ESTUDIO debe ser uno de: TAC, RM, ECO, OTROS. Responde ÚNICAMENTE con el objeto JSON.\n\nJSON a rellenar:\n{json.dumps(json_structure)}"
         response = gemini_model.generate_content([prompt_text, image])
         extracted_json_text = response.text.strip().replace('```json', '').replace('```', '').strip()
         extracted_data = json.loads(extracted_json_text)
-        
         return jsonify(extracted_data)
     except Exception as e:
         traceback.print_exc()
         return jsonify({'error': 'Error interno durante la extracción con IA'}), 500
 
-# --- RUTA DE GUARDADO MEJORADA PARA SUBIR LA IMAGEN ---
 @app.route('/api/save', methods=['POST'])
 @token_required
 def save_data_to_sheet():
     email = request.current_user_email
-    
-    # Ahora recibimos los datos y la imagen en una petición 'multipart/form-data'
     if 'data' not in request.form or 'sheet_id' not in request.form or 'image' not in request.files:
         return jsonify({'error': 'Faltan datos (data, sheet_id, image)'}), 400
         
@@ -252,29 +210,24 @@ def save_data_to_sheet():
         credentials = load_credentials_from_db(email)
         if not credentials: return jsonify({'error': 'No se pudieron cargar credenciales'}), 500
         
-        # 1. Subir imagen a Google Drive
         image_bytes = image_file.read()
-        # Creamos un nombre de archivo único
         filename = f"estudio_{data_to_save.get('ID', 'sin_id')}_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}.jpg"
-        image_link = upload_image_to_drive(credentials, image_bytes, filename)
+        file_id = upload_image_to_drive(credentials, image_bytes, filename)
         
-        if not image_link:
-            return jsonify({'error': 'No se pudo subir la imagen a Google Drive'}), 500
+        if not file_id: return jsonify({'error': 'No se pudo subir la imagen a Google Drive'}), 500
             
-        # 2. Preparar la fila para Google Sheets
-        data_to_save['FOTO'] = f'=IMAGE("{image_link}")'
+        # --- ¡CAMBIO 2! Construimos la URL de imagen directa ---
+        direct_image_url = f"https://drive.google.com/uc?export=view&id={file_id}"
+        data_to_save['FOTO'] = f'=IMAGE("{direct_image_url}")'
         
-        # Asumimos un orden fijo de columnas
         columns_order = ['NOMBRE', 'APELLIDOS', 'ID', 'FECHA ESTUDIO', 'SECCION', 'TIPO DE PATOLOGIA', 'TIPO DE ESTUDIO', 'FOTO']
         row_to_append = [data_to_save.get(col, "") for col in columns_order]
         
-        # 3. Guardar en la Sheet
         gc = gspread.authorize(credentials)
         spreadsheet = gc.open_by_key(sheet_id)
         worksheet = spreadsheet.sheet1
         worksheet.append_row(row_to_append)
         
-        # 4. Actualizar 'last_used'
         conn = get_db_connection()
         cur = conn.cursor()
         cur.execute("UPDATE user_sheets SET last_used_at = NOW() WHERE user_email = %s AND sheet_id = %s;", (email, sheet_id))
