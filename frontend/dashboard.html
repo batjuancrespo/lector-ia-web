@@ -6,11 +6,13 @@
     <title>Dashboard - Lector Radiológico IA</title>
     <link rel="stylesheet" href="style.css">
     <style>
+        /* Estilos adicionales para la nueva interfaz */
         .section { border-top: 1px solid #ddd; margin-top: 20px; padding-top: 20px; }
         .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; }
-        #results-form .form-group { margin-bottom: 10px; text-align: left; }
-        #results-form label { font-weight: bold; display: block; margin-bottom: 5px; }
-        #results-form input { width: calc(100% - 22px); }
+        .form-group { margin-bottom: 10px; text-align: left; }
+        .form-group label { font-weight: bold; display: block; margin-bottom: 5px; }
+        .form-group input { width: calc(100% - 22px); }
+        .form-group.full-width { grid-column: 1 / -1; } /* Para que un campo ocupe todo el ancho */
         select { width: 100%; padding: 10px; margin-top: 15px; border-radius: 6px; }
     </style>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/compressorjs/1.2.1/compressor.min.js"></script>
@@ -23,6 +25,7 @@
         
         <div class="section">
             <h2>1. Hoja de Cálculo de Destino</h2>
+            <div id="sheets-loader" style="display: none;">Cargando tus sheets...</div>
             <select id="sheets-dropdown" style="display: none;"></select>
             <div id="add-sheet-form">
                 <input type="text" id="new-sheet-id" placeholder="Pega el ID de una nueva Google Sheet">
@@ -40,16 +43,7 @@
             <h2>3. Verifica y Completa los Datos</h2>
             <form id="results-form">
                 <div class="form-grid">
-                    <div class="form-group"><label for="field-NOMBRE">Nombre</label><input type="text" id="field-NOMBRE" name="NOMBRE"></div>
-                    <div class="form-group"><label for="field-APELLIDOS">Apellidos</label><input type="text" id="field-APELLIDOS" name="APELLIDOS"></div>
-                    <div class="form-group"><label for="field-ID">ID Paciente</label><input type="text" id="field-ID" name="ID"></div>
-                    <div class="form-group"><label for="field-FECHA ESTUDIO">Fecha Estudio</label><input type="text" id="field-FECHA ESTUDIO" name="FECHA ESTUDIO"></div>
-                    <div class="form-group"><label for="field-SECCION">Sección</label><input type="text" id="field-SECCION" name="SECCION"></div>
-                    <div class="form-group"><label for="field-TIPO DE ESTUDIO">Tipo de Estudio</label><input type="text" id="field-TIPO DE ESTUDIO" name="TIPO DE ESTUDIO"></div>
-                </div>
-                <div class="form-group" style="margin-top: 15px;">
-                    <label for="field-TIPO DE PATOLOGIA">Tipo de Patología (entrada manual)</label>
-                    <input type="text" id="field-TIPO DE PATOLOGIA" name="TIPO DE PATOLOGIA" placeholder="Ej: Fractura, Nódulo, etc.">
+                    <!-- Los campos se generarán aquí dinámicamente -->
                 </div>
             </form>
             <button id="save-btn">Guardar Datos e Imagen en Sheet</button>
@@ -69,6 +63,7 @@
             imageInput: document.getElementById('imageInput'),
             extractBtn: document.getElementById('extract-btn'),
             resultsSection: document.getElementById('results-section'),
+            resultsForm: document.querySelector('#results-form .form-grid'), // Apuntamos al grid interno
             saveBtn: document.getElementById('save-btn'),
             status: document.getElementById('status')
         };
@@ -159,19 +154,47 @@
             try {
                 const response = await apiFetch('/api/extract', { method: 'POST', body: formData });
                 const extractedData = await response.json();
-                Object.keys(extractedData).forEach(key => {
-                    const field = document.getElementById(`field-${key}`);
-                    if (field) field.value = extractedData[key];
-                });
+                displayResultsForm(extractedData);
                 ALL_ELEMENTS.resultsSection.style.display = 'block';
-                ALL_ELEMENTS.status.textContent = "Datos extraídos. Verifica y completa.";
+                ALL_ELEMENTS.status.textContent = "Datos extraídos. Revisa los campos resaltados.";
             } catch (e) { ALL_ELEMENTS.status.textContent = "Error en la extracción."; }
         });
 
+        function displayResultsForm(extractedData) {
+            const formGrid = ALL_ELEMENTS.resultsForm;
+            formGrid.innerHTML = ''; // Limpiar formulario anterior
+            
+            const fieldsToShow = ['NOMBRE', 'APELLIDOS', 'ID', 'FECHA ESTUDIO', 'SECCION', 'TIPO DE ESTUDIO'];
+
+            fieldsToShow.forEach(field => {
+                const value = extractedData[field] || '';
+                const isEmpty = value.trim() === '';
+                const style = isEmpty ? 'style="background-color: #fffacd;"' : ''; // Fondo amarillo si está vacío
+                
+                const formGroup = document.createElement('div');
+                formGroup.className = 'form-group';
+                formGroup.innerHTML = `
+                    <label for="field-${field}">${field}</label>
+                    <input type="text" id="field-${field}" name="${field}" value="${value}" ${style}>
+                `;
+                formGrid.appendChild(formGroup);
+            });
+
+            // Añadir el campo de patología, que siempre es manual
+            const patologiaGroup = document.createElement('div');
+            patologiaGroup.className = 'form-group full-width';
+            patologiaGroup.innerHTML = `
+                <label for="field-TIPO DE PATOLOGIA">Tipo de Patología (entrada manual)</label>
+                <input type="text" id="field-TIPO DE PATOLOGIA" name="TIPO DE PATOLOGIA" placeholder="Ej: Fractura, Nódulo, etc.">
+            `;
+            formGrid.appendChild(patologiaGroup);
+        }
+
         ALL_ELEMENTS.saveBtn.addEventListener('click', async () => {
             const finalData = {};
-            // Recogemos los datos del formulario, incluyendo el campo manual
-            ['NOMBRE', 'APELLIDOS', 'ID', 'FECHA ESTUDIO', 'SECCION', 'TIPO DE PATOLOGIA', 'TIPO DE ESTUDIO'].forEach(key => {
+            const allFields = ['NOMBRE', 'APELLIDOS', 'ID', 'FECHA ESTUDIO', 'SECCION', 'TIPO DE PATOLOGIA', 'TIPO DE ESTUDIO'];
+            
+            allFields.forEach(key => {
                 finalData[key] = document.getElementById(`field-${key}`).value;
             });
 
@@ -188,6 +211,7 @@
                 // Reseteamos
                 ALL_ELEMENTS.resultsSection.style.display = 'none';
                 ALL_ELEMENTS.imageInput.value = '';
+                ALL_ELEMENTS.extractBtn.disabled = true;
                 compressedImageFile = null;
             } catch (e) { ALL_ELEMENTS.status.textContent = "Error al guardar."; }
         });
