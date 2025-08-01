@@ -3,105 +3,96 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Dashboard - Lector IA</title>
+    <title>Dashboard - Lector Radiológico IA</title>
     <link rel="stylesheet" href="style.css">
     <style>
-        /* Estilos adicionales para la nueva interfaz */
         .section { border-top: 1px solid #ddd; margin-top: 20px; padding-top: 20px; }
+        .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; }
         #results-form .form-group { margin-bottom: 10px; text-align: left; }
         #results-form label { font-weight: bold; display: block; margin-bottom: 5px; }
         #results-form input { width: calc(100% - 22px); }
         select { width: 100%; padding: 10px; margin-top: 15px; border-radius: 6px; }
     </style>
-    <!-- Importamos la librería para comprimir imágenes SIN verificación de integridad -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/compressorjs/1.2.1/compressor.min.js"></script>
 </head>
 <body>
     <div class="container">
-        <h1>Panel del Lector IA</h1>
+        <h1>Lector Radiológico IA</h1>
         <p class="user-info" id="user-info">Cargando...</p>
         <a id="logout-button" class="button" style="background-color: #e44d3a; display: none;">Cerrar Sesión</a>
         
-        <!-- SECCIÓN 1: GESTIÓN DE SHEETS -->
         <div class="section">
-            <h2>1. Selecciona o Añade una Hoja de Cálculo</h2>
-            <div id="sheets-loader" style="display: none;">Cargando tus sheets...</div>
+            <h2>1. Hoja de Cálculo de Destino</h2>
             <select id="sheets-dropdown" style="display: none;"></select>
             <div id="add-sheet-form">
                 <input type="text" id="new-sheet-id" placeholder="Pega el ID de una nueva Google Sheet">
-                <button id="add-sheet-btn">Añadir y Analizar Sheet</button>
+                <button id="add-sheet-btn">Añadir Sheet</button>
             </div>
         </div>
 
-        <!-- SECCIÓN 2: SUBIR IMAGEN -->
         <div id="upload-section" class="section" style="display: none;">
-            <h2>2. Sube una Imagen para Extraer Datos</h2>
+            <h2>2. Sube la Imagen del Estudio</h2>
             <input type="file" id="imageInput" accept="image/*">
-            <img id="preview" alt="Vista previa de la imagen" style="display: none;">
-            <button id="extract-btn" disabled>Extraer Datos</button>
+            <button id="extract-btn" disabled>Extraer Datos de la Imagen</button>
         </div>
 
-        <!-- SECCIÓN 3: VERIFICAR Y GUARDAR DATOS -->
         <div id="results-section" class="section" style="display: none;">
-            <h2>3. Verifica los Datos Extraídos</h2>
-            <form id="results-form"></form> <!-- Los campos se generarán aquí -->
-            <button id="save-btn">Guardar en Sheet</button>
+            <h2>3. Verifica y Completa los Datos</h2>
+            <form id="results-form">
+                <div class="form-grid">
+                    <div class="form-group"><label for="field-NOMBRE">Nombre</label><input type="text" id="field-NOMBRE" name="NOMBRE"></div>
+                    <div class="form-group"><label for="field-APELLIDOS">Apellidos</label><input type="text" id="field-APELLIDOS" name="APELLIDOS"></div>
+                    <div class="form-group"><label for="field-ID">ID Paciente</label><input type="text" id="field-ID" name="ID"></div>
+                    <div class="form-group"><label for="field-FECHA ESTUDIO">Fecha Estudio</label><input type="text" id="field-FECHA ESTUDIO" name="FECHA ESTUDIO"></div>
+                    <div class="form-group"><label for="field-SECCION">Sección</label><input type="text" id="field-SECCION" name="SECCION"></div>
+                    <div class="form-group"><label for="field-TIPO DE ESTUDIO">Tipo de Estudio</label><input type="text" id="field-TIPO DE ESTUDIO" name="TIPO DE ESTUDIO"></div>
+                </div>
+                <div class="form-group" style="margin-top: 15px;">
+                    <label for="field-TIPO DE PATOLOGIA">Tipo de Patología (entrada manual)</label>
+                    <input type="text" id="field-TIPO DE PATOLOGIA" name="TIPO DE PATOLOGIA" placeholder="Ej: Fractura, Nódulo, etc.">
+                </div>
+            </form>
+            <button id="save-btn">Guardar Datos e Imagen en Sheet</button>
         </div>
-
         <p id="status"></p>
     </div>
 
     <script>
-        const BACKEND_URL = "https://lector-ia-web.onrender.com";
-        // Obtenemos todos los elementos del DOM que vamos a manipular
-        const userInfo = document.getElementById('user-info');
-        const logoutButton = document.getElementById('logout-button');
-        const sheetsLoader = document.getElementById('sheets-loader');
-        const sheetsDropdown = document.getElementById('sheets-dropdown');
-        const addSheetForm = document.getElementById('add-sheet-form');
-        const newSheetIdInput = document.getElementById('new-sheet-id');
-        const addSheetBtn = document.getElementById('add-sheet-btn');
-        const uploadSection = document.getElementById('upload-section');
-        const imageInput = document.getElementById('imageInput');
-        const preview = document.getElementById('preview');
-        const extractBtn = document.getElementById('extract-btn');
-        const resultsSection = document.getElementById('results-section');
-        const resultsForm = document.getElementById('results-form');
-        const saveBtn = document.getElementById('save-btn');
-        const status = document.getElementById('status');
-        
+        const BACKEND_URL = "https://lector-ia-web.onrender.com"; // O tu URL de Render
+        const ALL_ELEMENTS = {
+            userInfo: document.getElementById('user-info'),
+            logoutButton: document.getElementById('logout-button'),
+            sheetsDropdown: document.getElementById('sheets-dropdown'),
+            newSheetIdInput: document.getElementById('new-sheet-id'),
+            addSheetBtn: document.getElementById('add-sheet-btn'),
+            uploadSection: document.getElementById('upload-section'),
+            imageInput: document.getElementById('imageInput'),
+            extractBtn: document.getElementById('extract-btn'),
+            resultsSection: document.getElementById('results-section'),
+            saveBtn: document.getElementById('save-btn'),
+            status: document.getElementById('status')
+        };
         let token = null;
         let userSheets = [];
         let currentSelectedSheet = null;
-        let extractedData = null;
-        let compressedImageFile = null; // Variable para guardar la imagen ya comprimida
+        let compressedImageFile = null;
 
-        // --- LÓGICA PRINCIPAL AL CARGAR LA PÁGINA ---
         document.addEventListener('DOMContentLoaded', () => {
-            const hash = window.location.hash;
-            if (hash && hash.startsWith('#token=')) {
-                token = hash.substring(7);
+            token = localStorage.getItem('accessToken');
+            const hashToken = window.location.hash.substring(7);
+            if (hashToken) {
+                token = hashToken;
                 localStorage.setItem('accessToken', token);
                 window.location.hash = '';
-            } else {
-                token = localStorage.getItem('accessToken');
             }
-
-            if (!token) {
-                window.location.href = 'index.html';
-            } else {
-                userInfo.textContent = "Verificando sesión...";
-                loadUserSheets();
-            }
+            if (!token) window.location.href = 'index.html';
+            else loadUserSheets();
         });
 
-        // --- FUNCIONES DE LA APP ---
-
-        // Función central para hacer llamadas a nuestra API de forma segura
         async function apiFetch(endpoint, options = {}) {
             options.headers = { ...options.headers, 'Authorization': `Bearer ${token}` };
             const response = await fetch(`${BACKEND_URL}${endpoint}`, options);
-            if (response.status === 401) { // Si el token es inválido, deslogueamos
+            if (response.status === 401) {
                 localStorage.removeItem('accessToken');
                 window.location.href = 'index.html';
                 throw new Error("No autorizado");
@@ -109,194 +100,99 @@
             return response;
         }
 
-        // Carga las sheets guardadas del usuario desde el backend
         async function loadUserSheets() {
-            sheetsLoader.style.display = 'block';
             try {
                 const response = await apiFetch('/api/sheets');
                 userSheets = await response.json();
-                
-                userInfo.textContent = "¡Bienvenido!";
-                logoutButton.style.display = 'inline-block';
-                
+                ALL_ELEMENTS.userInfo.textContent = "¡Bienvenido!";
+                ALL_ELEMENTS.logoutButton.style.display = 'inline-block';
                 if (userSheets.length > 0) {
-                    populateSheetsDropdown();
-                    sheetsDropdown.style.display = 'block';
+                    ALL_ELEMENTS.sheetsDropdown.innerHTML = userSheets.map(s => `<option value="${s.sheet_id}">${s.sheet_name}</option>`).join('');
+                    ALL_ELEMENTS.sheetsDropdown.style.display = 'block';
                     handleSheetSelection();
-                } else {
-                    userInfo.textContent += " Añade tu primera Sheet para empezar.";
                 }
-            } catch (e) {
-                status.textContent = "Error al cargar tus sheets.";
-            } finally {
-                sheetsLoader.style.display = 'none';
-            }
+            } catch (e) { ALL_ELEMENTS.status.textContent = "Error al cargar tus sheets."; }
         }
 
-        // Rellena el menú desplegable con las sheets del usuario
-        function populateSheetsDropdown() {
-            sheetsDropdown.innerHTML = userSheets.map(s => `<option value="${s.sheet_id}">${s.sheet_name}</option>`).join('');
-        }
-
-        // Se ejecuta cuando el usuario selecciona una sheet del menú
         function handleSheetSelection() {
-            const selectedId = sheetsDropdown.value;
-            currentSelectedSheet = userSheets.find(s => s.sheet_id === selectedId);
-            uploadSection.style.display = 'block';
-            resultsSection.style.display = 'none';
-            imageInput.value = '';
-            preview.style.display = 'none';
-            extractBtn.disabled = true;
-            compressedImageFile = null;
+            currentSelectedSheet = userSheets.find(s => s.sheet_id === ALL_ELEMENTS.sheetsDropdown.value);
+            ALL_ELEMENTS.uploadSection.style.display = 'block';
         }
 
-        // --- EVENT LISTENERS (INTERACCIONES DEL USUARIO) ---
-
-        // Botón para añadir una nueva sheet
-        addSheetBtn.addEventListener('click', async () => {
-            const newSheetId = newSheetIdInput.value.trim();
-            if (!newSheetId) { alert("Por favor, introduce un ID de Sheet."); return; }
-            
-            status.textContent = "Analizando nueva sheet...";
-            addSheetBtn.disabled = true;
+        ALL_ELEMENTS.addSheetBtn.addEventListener('click', async () => {
+            const newSheetId = ALL_ELEMENTS.newSheetIdInput.value.trim();
+            if (!newSheetId) return;
+            ALL_ELEMENTS.status.textContent = "Analizando...";
             try {
-                const response = await apiFetch('/api/sheets', {
+                await apiFetch('/api/sheets', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ sheet_id: newSheetId })
                 });
-                if (!response.ok) {
-                    const error = await response.json();
-                    throw new Error(error.error || "No se pudo analizar la sheet.");
-                }
-                
-                newSheetIdInput.value = '';
-                status.textContent = "¡Sheet añadida con éxito!";
-                loadUserSheets(); // Recargar la lista para que aparezca la nueva
-            } catch (e) {
-                status.textContent = `Error: ${e.message}`;
-            } finally {
-                addSheetBtn.disabled = false;
-            }
+                ALL_ELEMENTS.newSheetIdInput.value = '';
+                loadUserSheets();
+            } catch (e) { ALL_ELEMENTS.status.textContent = "Error al añadir la sheet."; }
         });
 
-        sheetsDropdown.addEventListener('change', handleSheetSelection);
+        ALL_ELEMENTS.sheetsDropdown.addEventListener('change', handleSheetSelection);
 
-        // Input de archivo: comprime la imagen al seleccionarla
-        imageInput.addEventListener('change', (event) => {
+        ALL_ELEMENTS.imageInput.addEventListener('change', (event) => {
             const file = event.target.files[0];
-            if (!file) {
-                extractBtn.disabled = true;
-                compressedImageFile = null;
-                return;
-            }
-
-            status.textContent = "Comprimiendo imagen para optimizar...";
-            extractBtn.disabled = true;
-            
+            if (!file) { compressedImageFile = null; ALL_ELEMENTS.extractBtn.disabled = true; return; }
+            ALL_ELEMENTS.status.textContent = "Comprimiendo imagen...";
             new Compressor(file, {
-                quality: 0.8,       // Calidad del 80% (buen balance)
-                maxWidth: 1600,     // Ancho máximo
-                maxHeight: 1600,    // Alto máximo
+                quality: 0.8, maxWidth: 1600, maxHeight: 1600,
                 success(result) {
-                    compressedImageFile = result; // Guardamos el archivo comprimido
-                    preview.src = URL.createObjectURL(result);
-                    preview.style.display = 'block';
-                    extractBtn.disabled = false;
-                    status.textContent = "Imagen lista para extraer.";
+                    compressedImageFile = result;
+                    ALL_ELEMENTS.extractBtn.disabled = false;
+                    ALL_ELEMENTS.status.textContent = "Imagen lista para extraer.";
                 },
-                error(err) {
-                    status.textContent = "Error al procesar la imagen.";
-                    compressedImageFile = null;
-                },
+                error(err) { ALL_ELEMENTS.status.textContent = "Error al procesar imagen."; },
             });
         });
 
-        // Botón para extraer datos
-        extractBtn.addEventListener('click', async () => {
-            if (!compressedImageFile || !currentSelectedSheet) return;
-            
-            status.textContent = "Extrayendo datos con IA... Esto puede tardar unos segundos.";
-            extractBtn.disabled = true;
-            resultsSection.style.display = 'none';
-            
+        ALL_ELEMENTS.extractBtn.addEventListener('click', async () => {
+            if (!compressedImageFile) return;
+            ALL_ELEMENTS.status.textContent = "Extrayendo datos con IA...";
             const formData = new FormData();
             formData.append('image', compressedImageFile, compressedImageFile.name);
-            formData.append('columns', JSON.stringify(currentSelectedSheet.columns));
-            
             try {
                 const response = await apiFetch('/api/extract', { method: 'POST', body: formData });
-                 if (!response.ok) {
-                    const error = await response.json();
-                    throw new Error(error.error || "La extracción con IA falló.");
-                }
-                
-                extractedData = await response.json();
-                displayResultsForm();
-                status.textContent = "Datos extraídos. Por favor, verifica y corrige si es necesario.";
-            } catch (e) {
-                status.textContent = `Error: ${e.message}`;
-            } finally {
-                extractBtn.disabled = false;
-            }
+                const extractedData = await response.json();
+                Object.keys(extractedData).forEach(key => {
+                    const field = document.getElementById(`field-${key}`);
+                    if (field) field.value = extractedData[key];
+                });
+                ALL_ELEMENTS.resultsSection.style.display = 'block';
+                ALL_ELEMENTS.status.textContent = "Datos extraídos. Verifica y completa.";
+            } catch (e) { ALL_ELEMENTS.status.textContent = "Error en la extracción."; }
         });
 
-        // Muestra el formulario con los resultados de la IA
-        function displayResultsForm() {
-            resultsForm.innerHTML = ''; // Limpiar formulario anterior
-            for (const column of currentSelectedSheet.columns) {
-                const value = extractedData[column] || '';
-                const formGroup = document.createElement('div');
-                formGroup.className = 'form-group';
-                formGroup.innerHTML = `
-                    <label for="field-${column}">${column}</label>
-                    <input type="text" id="field-${column}" name="${column}" value="${value}">
-                `;
-                resultsForm.appendChild(formGroup);
-            }
-            resultsSection.style.display = 'block';
-        }
-
-        // Botón para guardar los datos finales en la sheet
-        saveBtn.addEventListener('click', async () => {
+        ALL_ELEMENTS.saveBtn.addEventListener('click', async () => {
             const finalData = {};
-            for (const column of currentSelectedSheet.columns) {
-                finalData[column] = document.getElementById(`field-${column}`).value;
-            }
-            
-            status.textContent = "Guardando en Google Sheets...";
-            saveBtn.disabled = true;
+            // Recogemos los datos del formulario, incluyendo el campo manual
+            ['NOMBRE', 'APELLIDOS', 'ID', 'FECHA ESTUDIO', 'SECCION', 'TIPO DE PATOLOGIA', 'TIPO DE ESTUDIO'].forEach(key => {
+                finalData[key] = document.getElementById(`field-${key}`).value;
+            });
+
+            ALL_ELEMENTS.status.textContent = "Guardando datos e imagen...";
+            const formData = new FormData();
+            formData.append('image', compressedImageFile, compressedImageFile.name);
+            formData.append('data', JSON.stringify(finalData));
+            formData.append('sheet_id', currentSelectedSheet.sheet_id);
 
             try {
-                const response = await apiFetch('/api/save', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        sheet_id: currentSelectedSheet.sheet_id,
-                        columns: currentSelectedSheet.columns,
-                        data: finalData
-                    })
-                });
-                if (!response.ok) {
-                    const error = await response.json();
-                    throw new Error(error.error || "No se pudo guardar.");
-                }
-                
-                status.textContent = "¡Datos guardados con éxito!";
-                // Reseteamos para la siguiente imagen
-                resultsSection.style.display = 'none';
-                imageInput.value = '';
-                preview.style.display = 'none';
-                extractBtn.disabled = true;
+                const response = await apiFetch('/api/save', { method: 'POST', body: formData });
+                const result = await response.json();
+                ALL_ELEMENTS.status.textContent = result.message;
+                // Reseteamos
+                ALL_ELEMENTS.resultsSection.style.display = 'none';
+                ALL_ELEMENTS.imageInput.value = '';
                 compressedImageFile = null;
-            } catch(e) {
-                status.textContent = `Error: ${e.message}`;
-            } finally {
-                saveBtn.disabled = false;
-            }
+            } catch (e) { ALL_ELEMENTS.status.textContent = "Error al guardar."; }
         });
 
-        logoutButton.addEventListener('click', () => {
+        ALL_ELEMENTS.logoutButton.addEventListener('click', () => {
             localStorage.removeItem('accessToken');
             window.location.href = 'index.html';
         });

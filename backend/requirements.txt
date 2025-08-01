@@ -10,3 +10,4 @@ google-generativeai
 gspread
 cryptography
 PyJWT
+google-api-python-client
